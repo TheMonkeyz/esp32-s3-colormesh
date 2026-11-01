@@ -5,6 +5,13 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.2.0-rc.1 - 2026-11-01
+- Waves: tap the main screen to send a bicolour wave to every board nearby (centre = rings growing outward;
+  left, right, top or bottom = bands moving in from that side). Colour B is the opposite of your colour.
+  Waves from several boards merge, and a held colour adds to them. 4 s per wave, about 30 frames per second.
+- After a restart a board with a saved colour starts on the main screen; the ring is one swipe to the right.
+- Console: `wave centre|left|right|top|bottom`, `shot wave`; harness test `mesh.wave_tap`.
+
 ## v0.1.0 - 2026-10-31
 First release. Everything from the release candidates below:
 - Pick your colour on a ring of 12 at start-up, or any time with a swipe right from the main screen.

@@ -219,3 +219,16 @@ push ends before the scan (15.9 vs 16.2 ms), 0 TE timeouts, swipes at 54-57 fps.
 start leads the scan by ~0.6 ms at the top; a long stall of the LVGL task there (NVS write) can still tear one
 refresh. To port to espforge's board (backlog).
 
+### Waves (main/wave.c, mesh.c, ui.c; 2026-11-01)
+
+A tap on the main screen (centre within 100 px, else the quadrant) calls `mesh_start_wave(kind)`: the own wave starts
+at once; the advert carries `effect` (1-5) and `effect_seq` at payload bytes 17-18 for 1 s. A peer whose
+(effect, effect_seq) is new starts that wave at receiver time in the peer's colour (`mesh_waves()`). While a wave
+is active and the main page is shown, an LVGL timer (33 ms) paints the screen with `display_raw_frame` and
+`wave_fill()` (pure C: colour A = the sender's colour, B = `wave_opposite`, pitch 64 px, 160 px/s, 4 s with a
+500 ms fade; waves summed per pixel in linear light and normalised, holders' solid colours added; the edge ring
+kept). Tables: a 234x234 quarter distance table in PSRAM (86 KB, 0.5 s to build at boot). Measured on board A: one
+wave 29 fps, fill 6.2 ms; five waves 21 fps, fill 24 ms avg / 60 max. Console `wave <kind>`, `shot wave` (the raw
+frame; `shot main` shows the LVGL page underneath). Peer waves verified on three boards: centre from one, left
+from another, both merged.
+

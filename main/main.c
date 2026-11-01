@@ -40,7 +40,8 @@ void app_main(void)
     mesh_start();               // NimBLE; reads config_get(), so after config_load()
     console_init();             // the app's test console commands
     testcon_start();
-    ui_show_pick();
+    if (config_get()->has_color) ui_show_main();   // the ring is one swipe away; a fresh board starts on it
+    else ui_show_pick();
     diag_mark("app ready");     // forge.json ready_line: the harness starts its tests here
 
     // The app's work runs in its own tasks. Waits must wake on requests (ulTaskNotifyTake), never a fixed

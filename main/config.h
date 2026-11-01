@@ -7,9 +7,10 @@
 // also calls mesh_set_color() / mesh_set_dev_mode().
 typedef struct {
     uint8_t r, g, b;        // this board's colour (default #ff8000)
-    bool dev_mode;          // dev mode: pulls newer firmware from a peer (default off)
+    bool dev_mode;          // dev mode: pulls newer firmware from a peer (default on)
     char name[17];          // a name shown to peers and on the system page (default "")
     uint8_t bright;         // screen brightness, 0..100 % (default 80)
+    bool has_color;         // a colour was saved once (NVS "rgb"): boot goes straight to the main screen
 } app_cfg_t;
 
 void config_load(void);                 // after board_init(): applies the brightness

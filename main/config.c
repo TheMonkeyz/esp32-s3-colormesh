@@ -27,6 +27,7 @@ void config_load(void)
         size_t n = sizeof(cfg.name);
         char name[sizeof(cfg.name)];
         if (nvs_get_u32(h, "rgb", &rgb) == ESP_OK) {
+            cfg.has_color = true;
             cfg.r = rgb >> 16;
             cfg.g = rgb >> 8;
             cfg.b = rgb;
@@ -57,6 +58,7 @@ void config_set_color(uint8_t r, uint8_t g, uint8_t b)
     cfg.g = g;
     cfg.b = b;
     nvs_handle_t h;
+    cfg.has_color = true;
     if (open_rw(&h)) commit_close(h, nvs_check(nvs_set_u32(h, "rgb", (uint32_t)r << 16 | g << 8 | b), NS "/rgb"));
     ESP_LOGI(TAG, "color #%02x%02x%02x", r, g, b);
 }
