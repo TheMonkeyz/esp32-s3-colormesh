@@ -192,7 +192,10 @@ def hold_sends(ctx):
     ctx.note(f'hold on / off logged at {log_ms(on.string)} / {log_ms(off.string)} ms')
 
 
-SWIPE_HOLD_MS = 100                                    # a swipe from main: "hold off" at most this long after "on"
+# A swipe from main: "hold off" at most this long after "on". 150, not 100: a right swipe from main redraws the whole
+# screen at touch down (the hold colour), and the drag then starts 66-109 ms later on v0.4.0 and on espforge v0.7.0
+# alike (2026-11-01). The bug this guards (the hold kept for the whole slide) lasted ~440 ms.
+SWIPE_HOLD_MS = 150
 
 
 def swipe_hold(lines, page):

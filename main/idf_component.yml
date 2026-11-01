@@ -1,27 +1,24 @@
 dependencies:
   lvgl/lvgl: "9.2.2"   # pinned: LVGL versions differ in internals the framework relies on (docs/LESSONS.md)
   # espforge's components and board, at a release tag (as esp32-s3-rtcquebec). Bump every version together
-  # (tools/fetch_forge.py reads forge_core's); delete dependencies.lock when you do. The board brings
-  # esp_codec_dev (the microphones). No Wi-Fi in this app: forge_net and dns_server are here only because
-  # forge_lvgl's CMake requires forge_net (screens.h includes web.h for web_image_t); forge_net is linked, never
-  # started (espforge backlog: forge_lvgl without forge_net).
+  # (tools/fetch_forge.py reads forge_core's); delete dependencies.lock when you do. The board brings forge_audio and
+  # esp_codec_dev (the microphones). No Wi-Fi in this app: since espforge v0.7.0 forge_lvgl no longer needs forge_net,
+  # so forge_net and dns_server are not in the build at all. To try a framework change, copy a component into
+  # components/<name> (every espforge component has an idf_component.yml, so the local copy wins) or build against an
+  # espforge checkout with tools/forge_local.py.
   forge_core:
     git: https://github.com/TheMonkeyz/espforge.git
     path: components/forge_core
-    version: v0.5.0
+    version: v0.7.0
   forge_lvgl:
     git: https://github.com/TheMonkeyz/espforge.git
     path: components/forge_lvgl
-    version: v0.5.0
-  forge_net:
+    version: v0.7.0
+  forge_audio:
     git: https://github.com/TheMonkeyz/espforge.git
-    path: components/forge_net
-    version: v0.5.0
-  dns_server:
-    git: https://github.com/TheMonkeyz/espforge.git
-    path: components/dns_server
-    version: v0.5.0
+    path: components/forge_audio
+    version: v0.7.0
   board:
     git: https://github.com/TheMonkeyz/espforge.git
     path: boards/ws_amoled175/board
-    version: v0.5.0
+    version: v0.7.0
