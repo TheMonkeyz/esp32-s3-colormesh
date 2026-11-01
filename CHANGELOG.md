@@ -5,6 +5,11 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.19 - 2026-11-01
+- The waves keep moving while you swipe between pages, and come back right after a swipe.
+- No more tearing in the waves; smoother waves (about 50 frames a second on the mesh page, 33-44 on the others).
+- The talk disc and the Call button on the voice page have a black edge.
+
 ## v0.6.0-rc.12 - 2026-11-01
 - Texts on the colour choice, voice and game pages are white with a black outline: readable over any colour or wave.
 - The colour swatches have a black edge.

@@ -33,6 +33,8 @@ static const char *TAG = "ui";
 #define C_HINT   lv_color_hex(0x5C6470)       // the dim hint on the black centre
 #define C_DARK   lv_color_hex(0x1A1A1A)       // text on a bright mix
 #define C_ACCENT lv_color_hex(0x4DA3FF)
+#define C_EDGE   lv_color_hex(0x080808)       // outlines and swatch edges: black to the eye, but not the pure black
+                                              // a swipe frame shows the waves through (slide_frame)
 
 #define CX (DISP_W / 2)
 #define CY (DISP_H / 2)
@@ -52,7 +54,8 @@ static const char *TAG = "ui";
 #define SYS_ROWS   6                          // system: peers listed
 #define HOLD_IDLE_MS 150                      // safety net: no finger for this long = released
 #define TAP_CENTRE_R 100                      // main: a tap this close to the centre starts rings, else bands
-#define WAVE_PERIOD_MS 33                     // the wave loop: up to 30 fps
+#define WAVE_PERIOD_MS 10                     // the wave loop: as often as the panel takes a frame (its TE window paces it,
+                                              // up to ~59 fps); 33 ms capped it at 30 (choppy, rc.16)
 #define G_TAP_R    70                         // game: a tap this close to an icon's centre picks it
 #define G_PEERS    5                          // game: the peers' picks shown on the result
 #define G_PEER_DX  64                         // ...this far apart
@@ -132,7 +135,7 @@ static lv_obj_t *olabel(lv_obj_t *parent, lv_font_t *f, int y, int w)
     lv_obj_add_flag(box, LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
     static const int8_t d[8][2] = { { -1, -1 }, { 0, -1 }, { 1, -1 }, { -1, 0 }, { 1, 0 }, { -1, 1 }, { 0, 1 }, { 1, 1 } };
     for (int i = 0; i <= 8; i++) {
-        lv_obj_t *l = label(box, f, i < 8 ? lv_color_black() : lv_color_white(), 0, w);
+        lv_obj_t *l = label(box, f, i < 8 ? C_EDGE : lv_color_white(), 0, w);
         int dx = i < 8 ? d[i][0] * OUTLINE_PX : 0, dy = i < 8 ? d[i][1] * OUTLINE_PX : 0;
         lv_obj_align(l, LV_ALIGN_TOP_MID, dx, OUTLINE_PX + dy);
         if (i == 8) {
@@ -144,6 +147,8 @@ static lv_obj_t *olabel(lv_obj_t *parent, lv_font_t *f, int y, int w)
 }
 
 static bool outlined(lv_obj_t *l) { return lv_obj_get_user_data(l) == &outlined_tag; }
+
+static bool snap_dirty;                       // a page's look changed: the picture over the waves is old
 
 // A plain shape (circle, ring): no theme style, never clickable, presses go to the parent
 static lv_obj_t *shape(lv_obj_t *parent, int size)
@@ -161,6 +166,7 @@ static lv_obj_t *shape(lv_obj_t *parent, int size)
 static void set_text(lv_obj_t *l, const char *s)
 {
     if (!strcmp(lv_label_get_text(l), s)) return;
+    snap_dirty = true;
     if (!outlined(l)) { lv_label_set_text(l, s); return; }
     lv_obj_t *box = lv_obj_get_parent(l);        // the outline copies too
     for (uint32_t i = 0; i < lv_obj_get_child_count(box); i++) lv_label_set_text(lv_obj_get_child(box, i), s);
@@ -169,6 +175,7 @@ static void set_text(lv_obj_t *l, const char *s)
 static void set_hidden(lv_obj_t *o, bool hidden)
 {
     if (outlined(o)) o = lv_obj_get_parent(o);    // the whole outlined text
+    if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != hidden) snap_dirty = true;
     if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != hidden) {
         if (hidden) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -206,10 +213,12 @@ static void pick_update(void)
     uint32_t v = rgb(c->r, c->g, c->b), b2 = cfg_b2(c);
     if (v != pick_shown_rgb) {
         pick_shown_rgb = v;
+        snap_dirty = true;
         for (int i = 0; i < SW_N; i++) lv_obj_set_style_outline_width(p_sw[i], sw_rgb[i] == v ? 3 : 0, 0);
     }
     if (b2 != pick_shown_b2) {
         pick_shown_b2 = b2;
+        snap_dirty = true;
         for (int i = 0; i < SW_N; i++) set_hidden(p_dot[i], !b2 || sw_rgb[i] != (b2 & 0xFFFFFF));
     }
 }
@@ -310,7 +319,7 @@ static void pick_create_page(lv_obj_t *pg)
         lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(s, lv_color_hex(sw_rgb[i]), 0);
         lv_obj_set_style_border_width(s, SW_EDGE, 0);   // a black edge: the swatch stands out over the waves
-        lv_obj_set_style_border_color(s, lv_color_black(), 0);
+        lv_obj_set_style_border_color(s, C_EDGE, 0);
         lv_obj_set_style_border_opa(s, LV_OPA_COVER, 0);
         lv_obj_set_style_outline_color(s, lv_color_white(), 0);
         lv_obj_set_style_outline_pad(s, 4, 0);
@@ -642,6 +651,7 @@ static void game_update(void)
         g.n == glast.n && !memcmp(peers, glast.peers, sizeof(peers)))
         return;
     glast.phase = g.phase;
+    snap_dirty = true;
     glast.own = g.own;
     glast.word = word;
     glast.outcome = g.outcome;
@@ -786,6 +796,7 @@ static void game_create_page(lv_obj_t *pg)
 #define V_BTN_H    60
 #define V_BTN_Y    326
 #define C_REC      lv_color_hex(0xFF3B30)
+#define V_EDGE     3                          // the black edge of the call button and the talk disc
 #define V_NO_REC_Y (V_BTN_Y - V_BTN_PAD)                // a press this low is for the button, never a recording
 #define V_BTN_PAD  40                            // the button's touch area reaches this far past its edge (rc.6: a
                                               // press 21 px under it missed: fingers land low)
@@ -804,6 +815,7 @@ static void voice_update(void)
         return;
     vlast.phase = cs.phase, vlast.tenths = tenths, vlast.pct = cs.send_pct, vlast.recv = cs.receiving;
     vlast.own = own;
+    snap_dirty = true;
 
     bool rec = cs.phase == CLIP_REC, sending = cs.phase == CLIP_SENDING;
     lv_obj_set_style_border_color(v_ring, lv_color_hex(own), 0);
@@ -881,6 +893,9 @@ static void voice_create_page(lv_obj_t *pg)
 
     v_disc = shape(pg, V_DISC);
     lv_obj_set_style_bg_opa(v_disc, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(v_disc, V_EDGE, 0);
+    lv_obj_set_style_border_color(v_disc, C_EDGE, 0);
+    lv_obj_set_style_border_opa(v_disc, LV_OPA_COVER, 0);
     lv_obj_set_pos(v_disc, CX - V_DISC / 2, 150 - V_DISC / 2);
     v_secs = label(v_disc, f_mid, C_DARK, 0, V_DISC);
     lv_obj_center(v_secs);
@@ -893,6 +908,9 @@ static void voice_create_page(lv_obj_t *pg)
     lv_obj_set_style_radius(v_btn, V_BTN_H / 2, 0);
     lv_obj_set_style_bg_color(v_btn, lv_color_hex(0x2BB24C), 0);
     lv_obj_set_style_shadow_width(v_btn, 0, 0);
+    lv_obj_set_style_border_width(v_btn, V_EDGE, 0);   // a black edge, as the swatches (the user's, 2026-11-01)
+    lv_obj_set_style_border_color(v_btn, C_EDGE, 0);
+    lv_obj_set_style_border_opa(v_btn, LV_OPA_COVER, 0);
     lv_obj_add_flag(v_btn, LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_set_ext_click_area(v_btn, V_BTN_PAD);
     lv_obj_add_event_cb(v_btn, call_tapped, LV_EVENT_SHORT_CLICKED, NULL);
@@ -993,8 +1011,9 @@ static struct {                               // the frame being filled (wave_ba
  * (lv_snapshot ARGB8888, 868 KB of PSRAM, its mix disc hidden), taken when the loop starts and again every
  * SNAP_MS (a countdown, a press outline). LVGL's own redraws are off meanwhile (lv_display_enable_invalidation):
  * the page's objects still change, the picture shows them. */
-#define SNAP_MS 200                           // while the page can change: a game round, a touch in the last second
-#define SNAP_IDLE_MS 1000                     // otherwise (the outlined texts made a picture cost ~20 fps at 200 ms)
+#define SNAP_MS 200                           // at most this often: when the page changed, during a game round (its arc),
+                                              // within 1 s of a touch (a pressed look); never while nothing changes (a
+                                              // picture stops the frames ~45 ms: a hitch every second at rc.12)
 static lv_draw_buf_t snap;                    // the page's picture (data in PSRAM, allocated once)
 static uint8_t *snap_mem;
 static bool snap_ok;                          // the picture is of the page being drawn
@@ -1025,6 +1044,11 @@ static struct {                               // since the loop started drawing
     uint64_t fill_sum, frame_sum;
     int64_t t_first, t_last;                  // first and last frame's start
 } wl;
+
+/* Tearing (rc.12-rc.13): a frame started on the refresh's edge had to outrun the scan (~0.6 ms of margin); the slower
+ * fill with a page on top fell behind it. The board copy (components/board) now starts every raw frame behind the scan,
+ * in a window after each refresh (te rawchase): no tearing, the frame filled while it is sent (rc.14 drew it whole
+ * into PSRAM first: 21 fps, choppy). */
 
 static void wave_band(int y0, int n, void *dst, void *user)
 {
@@ -1076,6 +1100,7 @@ static void snap_take(int page)
         snap_page = page;
     }
     int64_t t0 = esp_timer_get_time();
+    snap_dirty = false;
     lv_obj_t *ring = page == PG_VOICE ? v_ring : page == PG_GAME ? g_ring : NULL;   // the waves draw the ring
     if (ring) lv_obj_add_flag(ring, LV_OBJ_FLAG_HIDDEN);
     snap_ok = snap_mem && lv_snapshot_take_to_draw_buf(pager_page(pager, page), LV_COLOR_FORMAT_ARGB8888, &snap)
@@ -1099,7 +1124,7 @@ static void wave_tick(lv_timer_t *t)
     int n = wave_ok ? mesh_waves(wf.w, WAVE_MAX, now) : 0;
     int page = lv_screen_active() == scr_pager ? pager_current(pager) : -1;
     bool wave_page = page == PG_MAIN || page == PG_PICK || page == PG_VOICE || page == PG_GAME;
-    if (n <= 0 || !wave_page || !slide_tap_ok() || !lv_obj_has_flag(ov, LV_OBJ_FLAG_HIDDEN) ||
+    if (n <= 0 || !wave_page || slide_busy() || !lv_obj_has_flag(ov, LV_OBJ_FLAG_HIDDEN) ||
         (wl.drawing && page != (snap_page >= 0 ? snap_page : PG_MAIN))) {
         if (wl.drawing) wave_stop(n > 0 ? "paused" : "end");
         return;
@@ -1114,7 +1139,7 @@ static void wave_tick(lv_timer_t *t)
             mesh_game_state(&g);
             busy |= g.phase != RPS_IDLE;
         }
-        if (snap_page != page || t0 - snap_at > (busy ? SNAP_MS : SNAP_IDLE_MS) * 1000LL) snap_take(page);
+        if (snap_page != page || ((busy || snap_dirty) && t0 - snap_at > SNAP_MS * 1000LL)) snap_take(page);
     }
     wl.t_last = t0;
     wf.n = n;
@@ -1126,7 +1151,7 @@ static void wave_tick(lv_timer_t *t)
     wf.rg = c->g;
     wf.rb = c->b;
     wf.fill_us = 0;
-    display_raw_frame(wave_band, NULL);
+    display_raw_frame(wave_band, NULL);       // filled band by band while sent; started behind the scan (rawchase)
     uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
     wl.frames++;
     wl.fill_sum += wf.fill_us;
@@ -1134,6 +1159,39 @@ static void wave_tick(lv_timer_t *t)
     if (wf.fill_us > wl.fill_max) wl.fill_max = wf.fill_us;
     if (us > wl.frame_max) wl.frame_max = us;
     display_unlock();
+}
+
+/* During a swipe (slide.c draws the pages as pictures): the waves go on behind the pages that show them (all but
+ * system), painted into their pure-black pixels (the background; outlines and edges are C_EDGE, not pure black).
+ * Computed row by row into an internal buffer (the wave loop is paused meanwhile). */
+static bool wave_page(int p) { return p == PG_PICK || p == PG_MAIN || p == PG_VOICE || p == PG_GAME; }
+
+static void slide_frame(int y0, int n, uint16_t *dst, lv_obj_t *pg, int cur, int off, bool vertical, void *user)
+{
+    static int nw;                            // the frame's waves, read at its first band
+    if (pg != pager || vertical || !wave_ok) return;
+    if (y0 == 0) {
+        wf.now = (uint32_t)(esp_timer_get_time() / 1000);
+        nw = mesh_waves(wf.w, WAVE_MAX, wf.now);
+        mesh_get_mix(&wf.hr, &wf.hg, &wf.hb);
+        wf.hold = mesh_holding() || mesh_peer_holding();
+        const app_cfg_t *c = config_get();
+        wf.rr = c->r, wf.rg = c->g, wf.rb = c->b;
+    }
+    if (nw <= 0) return;
+    static uint16_t rowbuf[WAVE_W];           // one row of waves in internal RAM: into PSRAM, the swipe's frames missed
+                                              // every second refresh (33 fps, rc.16)
+    // the two pages on screen: [0, split) shows "left", [split, W) shows "right"
+    int left = off <= 0 ? cur : cur - 1, right = off <= 0 ? cur + 1 : cur;
+    int split = off <= 0 ? WAVE_W + off : off;
+    bool wl_ = left >= 0 && wave_page(left), wr = right < PG_N && wave_page(right);
+    if (!wl_ && !wr) return;
+    int x0 = wl_ ? 0 : split, x1 = wr ? WAVE_W : split;
+    for (int r = 0; r < n; r++) {
+        wave_fill(rowbuf, y0 + r, 1, wf.w, nw, wf.now, wf.hr, wf.hg, wf.hb, wf.hold, wf.rr, wf.rg, wf.rb);
+        uint16_t *d = dst + (size_t)r * WAVE_W;
+        for (int x = x0; x < x1; x++) if (!d[x]) d[x] = rowbuf[x];
+    }
 }
 
 /* ---------- timers ---------- */
@@ -1173,6 +1231,10 @@ static void page_settled(int page, void *user)
     else if (page == PG_GAME) game_refresh();
     else if (page == PG_VOICE) voice_refresh();
     else pick_refresh();
+    // A swipe ended on a page with waves running: the waves at once (the loop waited for slide_tap_ok, 600 ms after the
+    // move: 700 ms of black background, rc.15); LVGL's redraw of the page still goes first (slide.c's picture of the
+    // screen follows it)
+    if (wave_ok && wave_page(page) && !slide_busy()) wave_tick(NULL);
 }
 
 static void pager_create_screen(void)
@@ -1290,6 +1352,7 @@ void ui_init(void)
     set_text(m_body, tr(T_STARTING));
     lv_screen_load(scr_msg);
     slide_set_drag_hook(drag_started, NULL);
+    slide_set_frame_hook(slide_frame, NULL);
     lv_timer_create(fast_tick, 50, NULL);
     lv_timer_create(slow_tick, 1000, NULL);
     lv_timer_create(wave_tick, WAVE_PERIOD_MS, NULL);

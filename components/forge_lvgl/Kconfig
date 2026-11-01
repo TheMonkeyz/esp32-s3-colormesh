@@ -1,0 +1,14 @@
+menu "espforge LVGL"
+
+    config FORGE_SLIDE_DRAG_PX
+        int "slide.c: how far a press moves before it is a pager drag (px)"
+        range 6 60
+        default 10
+        help
+            A press on a screen with a slide pager (slide_pager) becomes a drag of the pager once the finger has moved
+            this far along the larger axis. 10 is LVGL's own scroll threshold. A larger value keeps a tap or a hold
+            with a slight finger move from becoming a swipe (esp32-s3-colormesh takes 28), at the cost of a drag that
+            starts later. List scrolls drawn by slide.c still start after 10 px (fewer if this is less), and LVGL's
+            own scroll limit is set 10 px past whichever of the two applies to the press (LESSONS L99).
+
+endmenu
