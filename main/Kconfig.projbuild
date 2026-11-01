@@ -1,0 +1,10 @@
+menu "Starter app"
+
+    config APP_TZ
+        string "Time zone (POSIX TZ string)"
+        default "EST5EDT,M3.2.0,M11.1.0"
+        help
+            The clock's local time, e.g. "EST5EDT,M3.2.0,M11.1.0" (Montréal, Toronto, New York) or
+            "CET-1CEST,M3.5.0,M10.5.0/3" (Paris). A real app would take it from its settings or a web service.
+
+endmenu

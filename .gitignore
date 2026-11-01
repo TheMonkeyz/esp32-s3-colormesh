@@ -1,0 +1,39 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Prebuilt firmware produced by the build
+firmware/*.bin
+firmware/*.elf
+
+# Downloaded tool (esptool v4.8.1 standalone, see README)
+tools/esptool.exe
+tools/LICENSE
+
+# The flash helper's and the tools' runtime files (requests, logs, staged parts, cached ip/key): docs/PROTOCOL.md
+.devloop/
+
+# Harness and test outputs
+tools/harness/reports/
+tools/harness/baseline.proposed.json
+__pycache__/
+node_modules/
+.browsers/
+shots/
+test-results/
+playwright-report/
+snapshot_*.png
+
+# Claude Code's agent worktrees: `git add -A` committed one as an embedded repository (esp32-s3-rtcquebec)
+.claude/worktrees/
+
+# Web flasher / CI outputs
+_site/
+dist/
+version.txt
+
+# espforge at the pinned tag, in an app that takes the framework at a tag (tools/fetch_forge.py)
+.espforge/

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firmware installer</title>
+<!-- The web flasher (tools/make_flasher_site.py site): ESP Web Tools installs the parts listed in
+     <channel>/manifest.json over Web Serial (Chrome / Edge on a computer). channels.json, notes.json and site.json
+     are written next to this page by the same script. -->
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --fg: #1d2330; --muted: #5d6675; --line: #dde1e7; --accent: #2563eb;
+          --accent-fg: #fff; --warn: #a15c00; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11141a; --card: #1a1f28; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2b3240; --accent: #5b8cff;
+            --accent-fg: #0b0f17; --warn: #f0b35a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body.font { font-family: "Montserrat", system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .channels { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .channels button { flex: 1; min-width: 140px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+                     background: transparent; color: var(--fg); font: inherit; cursor: pointer; text-align: left; }
+  .channels button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .channels button:disabled { opacity: .45; cursor: not-allowed; }
+  .channels small { display: block; color: var(--muted); }
+  esp-web-install-button button[slot="activate"] { background: var(--accent); color: var(--accent-fg); border: 0;
+    border-radius: 8px; padding: 12px 20px; font: inherit; font-weight: 600; cursor: pointer; }
+  .unsupported, .not-allowed { color: var(--warn); }
+  .notes h3 { font-size: 1rem; margin: 16px 0 4px; }
+  .notes h3:first-child { margin-top: 0; }
+  .notes ul { margin: 0; padding-left: 20px; }
+  .notes .date { color: var(--muted); font-weight: normal; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  footer { color: var(--muted); font-size: .9rem; margin-top: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Firmware installer</h1>
+  <p class="sub">Connect the board with a USB cable, pick a channel and press Install. Works in Chrome or Edge on a
+    computer.</p>
+
+  <section class="card">
+    <div class="channels" role="group" aria-label="Release channel">
+      <button id="ch-stable" aria-pressed="true" disabled>Stable<small id="v-stable">loading…</small></button>
+      <button id="ch-beta" aria-pressed="false" disabled>Beta<small id="v-beta">loading…</small></button>
+    </div>
+    <esp-web-install-button id="install" manifest="stable/manifest.json">
+      <button slot="activate">Install</button>
+      <span slot="unsupported" class="unsupported">This browser can't talk to USB devices: use Chrome or Edge on a
+        computer.</span>
+      <span slot="not-allowed" class="not-allowed">USB access needs a secure page (https or localhost).</span>
+    </esp-web-install-button>
+    <p class="muted" id="try" hidden>No board at hand? <a href="try/">Try it in your browser</a>.</p>
+  </section>
+
+  <section class="card notes">
+    <h2 style="font-size:1.1rem;margin:0 0 12px">What's new</h2>
+    <div id="notes" class="muted">loading…</div>
+  </section>
+
+  <footer id="footer">Updates after this first install arrive over Wi-Fi: the board checks its channel by itself.</footer>
+</main>
+<script>
+// channels.json = {stable:{version,built,manifest}, beta:{...}|null, try?}, notes.json = {releases:[{version,date,notes}]},
+// site.json = {app, repo, fonts}; all written by tools/make_flasher_site.py
+const $ = id => document.getElementById(id);
+let channels = {}, releases = [], current = 'stable';
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+
+function pick(name) {
+  const c = channels[name];
+  if (!c) return;
+  current = name;
+  $('install').setAttribute('manifest', c.manifest);
+  for (const n of ['stable', 'beta']) $('ch-' + n).setAttribute('aria-pressed', String(n === name));
+  showNotes();
+}
+
+// The notes up to the selected version: what someone installing it gets
+function showNotes() {
+  const v = channels[current] && channels[current].version;
+  const i = releases.findIndex(r => r.version === v);
+  const list = i >= 0 ? releases.slice(i, i + 5) : releases.slice(0, 5);
+  $('notes').classList.toggle('muted', !list.length);
+  $('notes').innerHTML = list.length ? list.map(r =>
+    `<h3>${esc(r.version)} <span class="date">${esc(r.date || '')}</span></h3>` +
+    `<ul>${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`).join('') : 'No release notes.';
+}
+
+fetch('site.json', { cache: 'no-store' }).then(r => r.json()).then(s => {
+  if (s.app) { $('title').textContent = s.app + ' installer'; document.title = s.app + ' installer'; }
+  if (s.repo) $('footer').insertAdjacentHTML('beforeend',
+    ` Source and releases: <a href="https://github.com/${esc(s.repo)}">github.com/${esc(s.repo)}</a>.`);
+  if (s.fonts) {
+    const f = new FontFace('Montserrat', 'url(fonts/montserrat.ttf)');
+    f.load().then(ff => { document.fonts.add(ff); document.body.classList.add('font'); }).catch(() => {});
+  }
+}).catch(() => {});
+
+fetch('channels.json', { cache: 'no-store' }).then(r => r.json()).then(ch => {
+  channels = ch;
+  for (const n of ['stable', 'beta']) {
+    const c = ch[n];
+    $('ch-' + n).disabled = !c;
+    $('v-' + n).textContent = c ? `${c.version} · ${c.built}` : 'none yet';
+    $('ch-' + n).onclick = () => pick(n);
+  }
+  $('try').hidden = !ch.try;
+  pick(ch.stable ? 'stable' : 'beta');
+}).catch(() => { $('v-stable').textContent = $('v-beta').textContent = 'unavailable'; });
+
+fetch('notes.json', { cache: 'no-store' }).then(r => r.json()).then(n => {
+  releases = n.releases || [];
+  showNotes();
+}).catch(() => { $('notes').textContent = 'No release notes.'; });
+</script>
+</body>
+</html>

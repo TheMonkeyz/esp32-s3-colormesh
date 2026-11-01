@@ -1,0 +1,2 @@
+dependencies:
+  lvgl/lvgl: "9.2.2"   # pinned: LVGL versions differ in internals the framework relies on (docs/LESSONS.md)

@@ -1,0 +1,12 @@
+# Debug checks for a test build only (docs/TESTING.md "Debug build"): layered over sdkconfig.defaults with
+#   idf.py -B build\debug -D SDKCONFIG=build\debug\sdkconfig -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.debug" build
+# They catch memory corruption where it happens (an abort with a backtrace) instead of a crash somewhere else later.
+# They cost speed and internal RAM, so the harness's performance limits don't apply to this build: run it for the
+# functional tests and read the log for "CORRUPT HEAP", "Stack canary" / "Stack protection fault" and panics.
+
+# Canary bytes around every heap block, checked on free (light: no fill on alloc/free)
+CONFIG_HEAP_POISONING_LIGHT=y
+# The last bytes of each task's stack are a watchpoint: an overflow stops at the faulting instruction
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+# GCC's stack protector on functions with local arrays
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y

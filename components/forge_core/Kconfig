@@ -1,0 +1,20 @@
+menu "espforge core"
+
+    config FORGE_DIAG_TASK_STATS
+        bool "diag: per-task CPU and stack statistics at each report"
+        default y
+        help
+            The "diag: tasks" and "diag: cpu" lines. They come from uxTaskGetSystemState(), which measures every task's
+            stack with interrupts off: ~6 ms with 25 tasks on an ESP32-P4. A display whose driver restarts each frame
+            from an interrupt (ESP-IDF's MIPI-DSI DPI panel: ~0.9 ms between frames) then misses a frame now and then
+            and flashes white: turn this off there (MeteoBus's P4 port, October 2026; docs/LESSONS.md L201).
+
+    config FORGE_DIAG_PSRAM_LARGEST
+        bool "diag: PSRAM's largest free block in the heap line"
+        default y
+        help
+            heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) walks the whole PSRAM heap with interrupts off: ~2.3 ms
+            with 32 MB. Off, the heap line keeps PSRAM's free size and minimum and prints "largest -" instead. Same
+            reason as FORGE_DIAG_TASK_STATS. The starting log line "diag: stats cost" times both on this board.
+
+endmenu

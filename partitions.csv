@@ -1,0 +1,12 @@
+# Name,   Type, SubType, Offset,   Size
+# Two app slots for updates over Wi-Fi (forge_ota), otadata (USB flashes must include ota_data_initial.bin, or a
+# board that last updated over Wi-Fi keeps booting ota_1), and the last crash for the next boot (diag.c).
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+ota_0,    app,  ota_0,   0x10000,  3M,
+ota_1,    app,  ota_1,   0x310000, 3M,
+otadata,  data, ota,     0x610000, 0x2000,
+# forge_map's flash cache (one 512 KB slot per zoom at 466x466: 17 zooms), as weather_amoled's and MeteoBus's layout;
+# then the crash dump. A table change needs a USB / web-flasher install once (an update over Wi-Fi keeps the old one).
+mapcache, data, 0x40,    0x620000, 0x8C0000,
+coredump, data, coredump, 0xEE0000, 128K,

@@ -1,0 +1,70 @@
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# Quad I/O flash: the program runs from flash through a 16 KB cache, and LVGL's code is large; twice the bits per
+# clock on cache misses (~30 % faster LVGL rendering than DIO in weather_amoled). The bootloader switches the flash
+# to QIO itself (esptool still writes its header as "dio", as ESP-IDF does for QIO): it takes a bootloader built
+# with this, i.e. a USB / web-flasher install; an update over Wi-Fi keeps the old bootloader.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# Power management for dynamic frequency scaling only (the board's "screen" lock: 240 MHz while the panel is awake; an
+# idle core may drop to 80 MHz while presence has the screen off). No light sleep, no tickless idle: the 15 ms touch /
+# LVGL loop and the panel's DMA need the clock. From MeteoBus v0.2.1.
+CONFIG_PM_ENABLE=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+# 64-byte data cache lines (32 by default, same 32 KB cache): sequential reads from PSRAM fetch twice the bytes per line
+# fill. MeteoBus: every PSRAM-bound frame got faster, none slower (zoom fill -5 %, bus map 1725 -> 1663 ms, snapshots ~4 %).
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_FREERTOS_HZ=1000
+# Main task: start-up and the app's loop. Check "main" in the diag tasks line after adding work to it.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+# System event task: the Easy Connect success path (log, NVS write, display labels) ran on its 2.3 KB with ~600 B spare
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=3584
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_USE_CUSTOM_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_USE_TINY_TTF=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_BUILD_EXAMPLES=n
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_LV_USE_QRCODE=y
+CONFIG_LV_USE_SNAPSHOT=y
+CONFIG_HTTPD_MAX_URI_LEN=600
+# Hardware AES: weather_amoled turned it off once because it couldn't get internal DMA memory and the settings page
+# arrived truncated; with LVGL's heap in PSRAM it works: snapshots over HTTPS 2.2 -> 1.5 s.
+# If pages ever arrive truncated again, look at internal DMA memory first.
+CONFIG_MBEDTLS_HARDWARE_AES=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_LV_DEF_REFR_PERIOD=15
+# No theme style transitions (80 ms fades on press): each one redraws, and a redraw that changes nothing still costs
+CONFIG_LV_THEME_DEFAULT_TRANSITION_TIME=0
+CONFIG_LWIP_MAX_SOCKETS=16
+# lwIP's counters for the console's "netstat" (does anything from outside reach the chip? L208); a few hundred bytes
+CONFIG_LWIP_STATS=y
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+CONFIG_ESP_WIFI_DPP_SUPPORT=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# A crash is kept in the coredump partition and summarised at the next boot (diag.c): crash details used to exist
+# only if someone was watching the USB log at the time
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+# espforge (components' Kconfig; same values as forge.json)
+CONFIG_FORGE_SETUP_SSID="Forge-Setup"
+CONFIG_FORGE_TLS_NAME="espforge device"
+CONFIG_FORGE_REPO="TheMonkeyz/espforge"
+CONFIG_FORGE_OTA_SITE="https://themonkeyz.github.io/espforge/"
+# Faster key generation on the NIST curves (precomputed tables): Easy Connect must answer the phone's request before
+# it leaves the channel (a phone on a 5 GHz network only visits the 2.4 GHz channel briefly). See docs/LESSONS.md.
+CONFIG_MBEDTLS_ECP_FIXED_POINT_OPTIM=y

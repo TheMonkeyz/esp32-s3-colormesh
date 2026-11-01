@@ -1,0 +1,10 @@
+menu "espforge updates"
+
+    config FORGE_OTA_SITE
+        string "Update site (GitHub Pages URL, ending with /)"
+        default "https://themonkeyz.github.io/espforge/"
+        help
+            Where channels.json, <channel>/manifest.json and notes.json live (tools/make_flasher_site.py, CI).
+            Same as ota_site in forge.json. Devices poll this address: never rename the repository or account.
+
+endmenu

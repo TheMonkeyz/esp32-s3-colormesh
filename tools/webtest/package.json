@@ -1,0 +1,14 @@
+{
+  "name": "espforge-webtest",
+  "version": "1.0.0",
+  "description": "Browser tests of the settings page (main/web/index.html) against a mock display (mock-server.js)",
+  "scripts": {
+    "test": "playwright test",
+    "mock": "node mock-server.js 8099"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  },
+  "private": true
+}

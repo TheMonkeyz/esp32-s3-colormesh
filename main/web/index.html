@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>espforge</title>
+<style>
+  :root { --bg:#0b0d10; --card:#161a20; --text:#f2f4f7; --dim:#8b95a1; --accent:#4da3ff; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 8px 0 2px; }
+  #version { color: var(--dim); font-size: 13px; margin-bottom: 12px; }
+  section { background: var(--card); border-radius: 12px; padding: 14px; margin: 12px 0; }
+  h2 { font-size: 16px; margin: 0 0 10px; color: var(--accent); }
+  label { display: block; color: var(--dim); font-size: 13px; margin: 8px 0 4px; }
+  input, select, button { width: 100%; font: inherit; padding: 10px; border-radius: 8px; border: 1px solid #2a313b;
+    background: #0f1216; color: var(--text); }
+  button { background: var(--accent); border: 0; color: #00172e; font-weight: 600; margin-top: 10px; }
+  button.secondary { background: #2a313b; color: var(--text); }
+  ul { list-style: none; padding: 0; margin: 0; max-height: 200px; overflow: auto; }
+  li { padding: 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; }
+  li:hover, li.sel { background: #222932; }
+  li span { color: var(--dim); font-size: 13px; }
+  #msg { min-height: 1.4em; color: var(--dim); }
+  #msg.bad { color: var(--bad); }
+  #update-notes { white-space: pre-wrap; color: var(--dim); font-size: 14px; margin-top: 8px; }
+  [hidden] { display: none !important; }
+  .row { display: flex; gap: 8px; align-items: flex-end; }   /* a label on two lines (French) doesn't shift its field */
+  .row > * { flex: 1; }
+  .hint { color: var(--dim); font-size: 13px; margin-top: 6px; }
+  label.chk { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 15px; margin: 12px 0 4px; }
+  label.chk input { width: auto; flex: none; }
+  #scr-state { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1 data-i18n="title">Settings</h1>
+  <div id="version"></div>
+  <div id="msg" role="status"></div>
+
+  <section id="screen">
+    <h2 data-i18n="screen">Screen</h2>
+    <div id="scr-state" role="status"></div>
+    <div id="scr-level" class="hint"></div>
+    <label class="chk"><input type="checkbox" id="scr-en"> <span data-i18n="dim_quiet">Dim, then turn off, the screen when the room is quiet</span></label>
+    <div class="row">
+      <div>
+        <label for="scr-dim" data-i18n="dim_after">Dim after (quiet)</label>
+        <select id="scr-dim"></select>
+      </div>
+      <div>
+        <label for="scr-off" data-i18n="off_after">Turn off after (quiet in all)</label>
+        <select id="scr-off"></select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="scr-bright" data-i18n="bright">Brightness (%)</label>
+        <input id="scr-bright" type="number" inputmode="numeric" min="5" max="100">
+      </div>
+      <div>
+        <label for="scr-dimpct" data-i18n="dimmed">Dimmed (%)</label>
+        <input id="scr-dimpct" type="number" inputmode="numeric" min="1" max="100">
+      </div>
+    </div>
+    <label class="chk" id="scr-motion-box"><input type="checkbox" id="scr-motion"> <span data-i18n="motion_wake">Light up when the device is picked up or moved</span></label>
+    <button id="scr-save" data-i18n="save">Save</button>
+    <button id="scr-cal" class="secondary" data-i18n="calibrate">Measure the background noise (stay quiet 5 s)</button>
+    <div class="hint" data-i18n="cal_hint">Do it once where the device stays: the screen then lights up on sounds louder than its background noise.</div>
+  </section>
+
+  <section>
+    <h2 data-i18n="wifi">Wi-Fi network</h2>
+    <ul id="wifi-list"></ul>
+    <label for="wifi-ssid" data-i18n="ssid">Network name</label>
+    <input id="wifi-ssid" autocomplete="off" maxlength="32">
+    <label for="wifi-pass" data-i18n="pass">Password</label>
+    <input id="wifi-pass" type="password" maxlength="64">
+    <button id="wifi-save" data-i18n="save_wifi">Save and restart</button>
+  </section>
+
+  <section>
+    <h2 data-i18n="language">Language</h2>
+    <select id="lang"></select>
+  </section>
+
+  <section>
+    <h2 data-i18n="updates">Updates</h2>
+    <div id="update-state"></div>
+    <label for="update-channel" data-i18n="channel">Channel</label>
+    <select id="update-channel">
+      <option value="stable" data-i18n="stable">Stable</option>
+      <option value="beta" data-i18n="beta">Beta (release candidates)</option>
+    </select>
+    <button id="update-check" class="secondary" data-i18n="check">Check now</button>
+    <button id="update-install" data-i18n="install" hidden>Install</button>
+    <div id="update-notes"></div>
+  </section>
+</main>
+<script>
+// Texts of this page in each language (the display's own texts are in main/i18n_strings.h). French: Québec,
+// standard written. Every key in every language; t() falls back to English.
+const I18N = {
+  en: {
+    title: 'Settings', wifi: 'Wi-Fi network', ssid: 'Network name', pass: 'Password', save_wifi: 'Save and restart',
+    language: 'Language', updates: 'Updates', channel: 'Channel', stable: 'Stable', beta: 'Beta (release candidates)',
+    check: 'Check now', install: 'Install', version: 'Version {v}',
+    st_idle: 'Not checked yet', st_checking: 'Checking...', st_up_to_date: 'Up to date ({v})',
+    st_available: 'Version {v} is available', st_downloading: 'Installing... {p} %', st_done: 'Installed: restarting',
+    st_failed: 'Update failed: {e}', rolled_back: '{v} was undone: the device restarted before it was confirmed.',
+    saved_wifi: 'Saved. The device restarts and joins {s}.', bad_wifi: 'Check the network name and password.',
+    no_key: 'Open this page by scanning the QR code on the device (System screen): changes need its key.',
+    bad_key: 'The key was refused: scan the QR code on the device again.', failed: 'That didn\'t work ({e}).',
+    scanning: 'Looking for networks...', saved: 'Saved.',
+    screen: 'Screen', dim_quiet: 'Dim, then turn off, the screen when the room is quiet', dim_after: 'Dim after (quiet)',
+    off_after: 'Turn off after (quiet in all)', bright: 'Brightness (%)', dimmed: 'Dimmed (%)',
+    motion_wake: 'Light up when the device is picked up or moved', save: 'Save',
+    calibrate: 'Measure the background noise (stay quiet 5 s)',
+    cal_hint: 'Do it once where the device stays: the screen then lights up on sounds louder than its background noise.',
+    st_active: 'Active', st_dim: 'Dimmed', st_off: 'Off', st_cal: 'Calibrating... {s} s',
+    no_mic: 'No microphone: the screen stays on', state_line: '{s} · brightness {p} %',
+    level: 'Sound {l} dB · lights up above {th} dB', cal_start: 'Stay quiet: measuring the background noise for 5 s.',
+    cal_na: 'Can\'t measure now: no microphone, or a measure is already running.',
+    cal_ok: 'Background noise measured: {b} dBFS.',
+    cal_noisy: 'The room wasn\'t quiet enough: the previous level ({b} dBFS) was kept. Try again in silence.',
+    off_longer: 'Turning off must come after dimming.', not_saved: 'Not saved.',
+    n_s: '{n} s', n_min: '{n} min', n_h: '{n} h'
+  },
+  fr: {
+    title: 'Réglages', wifi: 'Réseau Wi-Fi', ssid: 'Nom du réseau', pass: 'Mot de passe', save_wifi: 'Enregistrer et redémarrer',
+    language: 'Langue', updates: 'Mises à jour', channel: 'Canal', stable: 'Stable', beta: 'Bêta (versions candidates)',
+    check: 'Vérifier maintenant', install: 'Installer', version: 'Version {v}',
+    st_idle: 'Pas encore vérifiées', st_checking: 'Vérification...', st_up_to_date: 'À jour ({v})',
+    st_available: 'La version {v} est offerte', st_downloading: 'Installation... {p} %', st_done: 'Installée : redémarrage',
+    st_failed: 'Échec de la mise à jour : {e}', rolled_back: '{v} annulée : l\'appareil a redémarré avant de la confirmer.',
+    saved_wifi: 'Enregistré. L\'appareil redémarre et se connecte à {s}.', bad_wifi: 'Vérifiez le nom du réseau et le mot de passe.',
+    no_key: 'Ouvrez cette page en balayant le code QR de l\'appareil (écran Système) : les changements exigent sa clé.',
+    bad_key: 'La clé a été refusée : balayez de nouveau le code QR de l\'appareil.', failed: 'Échec ({e}).',
+    scanning: 'Recherche des réseaux...', saved: 'Enregistré.',
+    screen: 'Écran', dim_quiet: 'Tamiser puis éteindre l\'écran quand la pièce est calme', dim_after: 'Tamiser après (silence)',
+    off_after: 'Éteindre après (silence au total)', bright: 'Luminosité (%)', dimmed: 'Luminosité tamisée (%)',
+    motion_wake: 'Rallumer l\'écran quand on soulève ou déplace l\'appareil', save: 'Enregistrer',
+    calibrate: 'Mesurer le bruit de fond (silence 5 s)',
+    cal_hint: 'À faire une fois à l\'endroit où l\'appareil restera : l\'écran se rallume ensuite sur un son plus fort que le bruit ambiant.',
+    st_active: 'Allumé', st_dim: 'Tamisé', st_off: 'Éteint', st_cal: 'Mesure du bruit de fond... {s} s',
+    no_mic: 'Aucun microphone : l\'écran reste allumé', state_line: '{s} · luminosité {p} %',
+    level: 'Son {l} dB · l\'écran se rallume au-dessus de {th} dB', cal_start: 'Gardez le silence : mesure du bruit de fond pendant 5 s.',
+    cal_na: 'Mesure impossible pour le moment : aucun microphone, ou une mesure est déjà en cours.',
+    cal_ok: 'Bruit de fond mesuré : {b} dBFS.',
+    cal_noisy: 'La pièce n\'était pas assez silencieuse : le niveau précédent ({b} dBFS) a été conservé. ' +
+               'Réessayez en gardant le silence.',
+    off_longer: 'L\'écran doit s\'éteindre après avoir été tamisé.', not_saved: 'Non enregistré.',
+    n_s: '{n} s', n_min: '{n} min', n_h: '{n} h'
+  }
+};
+let lang = 'en';
+// Never name a parameter or variable "t": it would hide this function (weather_amoled shipped a page whose Install
+// button never showed because of that)
+function t(key, vars) {
+  let s = (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+  for (const k in vars || {}) s = s.replace('{' + k + '}', vars[k]);
+  return s;
+}
+const $ = id => document.getElementById(id);
+
+// The key travels in the QR code's fragment (#k=...): never sent to a server; kept for this tab
+let key = '';
+try {
+  const m = location.hash.match(/k=([0-9a-f]{16})/);
+  if (m) { sessionStorage.setItem('key', m[1]); history.replaceState(null, '', location.pathname); }
+  key = sessionStorage.getItem('key') || '';
+} catch (e) {}
+
+let setupNet = false;          // on the device's setup network: no key needed
+
+function say(text, bad) { $('msg').textContent = text; $('msg').className = bad ? 'bad' : ''; }
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Key': key }, body: JSON.stringify(body)
+  };
+  const r = await fetch(path, opt);
+  if (r.status === 401) { say(t(key ? 'bad_key' : 'no_key'), true); throw new Error('key'); }
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+function applyTexts() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+}
+
+let lastUpdate = null;
+function showUpdate(u) {
+  lastUpdate = u;
+  const v = { v: u.latest || u.current, p: u.progress, e: u.error };
+  $('update-state').textContent = t('st_' + u.state, v);
+  $('update-channel').value = u.channel;
+  $('update-install').hidden = u.state !== 'available';
+  $('update-notes').textContent = u.state === 'available' && u.notes ? u.notes : '';
+  if (u.rolled_back) say(t('rolled_back', { v: u.rolled_back }), true);
+}
+
+async function loadInfo() {
+  const i = await api('/api/info');
+  setupNet = !!i.setup;
+  lang = I18N[i.lang] ? i.lang : 'en';
+  const sel = $('lang');
+  sel.innerHTML = '';
+  for (const l of i.languages || []) {
+    const o = document.createElement('option');
+    o.value = l.code; o.textContent = l.name; sel.appendChild(o);
+  }
+  sel.value = lang;
+  applyTexts();
+  $('version').textContent = t('version', { v: i.version });
+  if (!key && !setupNet) say(t('no_key'), true);
+}
+
+async function scan() {
+  const list = $('wifi-list');
+  list.innerHTML = '<li>' + t('scanning') + '</li>';
+  try {
+    const nets = await api('/api/scan');
+    list.innerHTML = '';
+    for (const n of nets) {
+      const li = document.createElement('li');
+      li.textContent = n.ssid;
+      const s = document.createElement('span');
+      s.textContent = n.rssi + ' dBm' + (n.secure ? ' 🔒' : '');
+      li.appendChild(s);
+      li.onclick = () => {
+        list.querySelectorAll('li').forEach(x => x.classList.remove('sel'));
+        li.classList.add('sel');
+        $('wifi-ssid').value = n.ssid;
+        $('wifi-pass').focus();
+      };
+      list.appendChild(li);
+    }
+  } catch (e) { list.innerHTML = ''; }
+}
+
+$('wifi-save').onclick = async () => {
+  const ssid = $('wifi-ssid').value.trim(), pass = $('wifi-pass').value;
+  if (!ssid || (pass && pass.length < 8)) { say(t('bad_wifi'), true); return; }
+  try { await api('/api/wifi', { ssid, pass }); say(t('saved_wifi', { s: ssid })); }
+  catch (e) { if (e.message !== 'key') say(t('bad_wifi'), true); }
+};
+
+$('lang').onchange = async () => {
+  const code = $('lang').value;
+  try {
+    await api('/api/settings', { lang: code });
+    lang = code;
+    applyTexts();
+    screenTexts();
+    if (lastUpdate) showUpdate(lastUpdate);
+    say(t('saved'));
+  } catch (e) { if (e.message !== 'key') say(t('failed', { e: e.message }), true); }
+};
+
+async function post_update(body) {
+  try { showUpdate(await api('/api/update', body)); }
+  catch (e) { if (e.message !== 'key') say(t('failed', { e: e.message }), true); }
+}
+$('update-check').onclick = () => post_update({ action: 'check' });
+$('update-install').onclick = () => post_update({ action: 'install' });
+$('update-channel').onchange = () => post_update({ channel: $('update-channel').value });
+
+// ---- screen dimming: GET/POST /api/presence, POST /api/calibrate (components/forge_presence on the device)
+const DIM_CHOICES = [120, 300, 600, 1800, 3600];            // seconds of quiet before dimming
+const OFF_CHOICES = [900, 1800, 3600, 7200, 10800];         // seconds of quiet in all before the screen goes off
+let screen = null, screenLoaded = false;
+const dur = s => s >= 3600 && s % 1800 === 0 ? t('n_h', { n: s / 3600 }) :
+                 s >= 60 && s % 30 === 0 ? t('n_min', { n: s / 60 }) : t('n_s', { n: Math.round(s) });
+function fillDur(sel, choices, v) {                         // the choices, and the saved value if it is another
+  const all = [...new Set(choices.concat(v ? [Math.round(v)] : []))].sort((a, b) => a - b);
+  sel.innerHTML = '';
+  for (const c of all) {
+    const o = document.createElement('option');
+    o.value = c; o.textContent = dur(c); sel.appendChild(o);
+  }
+  if (v) sel.value = Math.round(v);
+}
+
+function showScreen(p) {
+  // A calibration this page saw end: its verdict ("noisy": the device kept the previous baseline)
+  if (screen && screen.calibrating && !p.calibrating && (p.cal === 'ok' || p.cal === 'noisy'))
+    say(t('cal_' + p.cal, { b: Math.round(p.baseline_db) }), p.cal === 'noisy');
+  screen = p;
+  const name = p.calibrating ? t('st_cal', { s: Math.ceil(p.calib_left_s) }) :
+               !p.mic_ok ? t('no_mic') : t('st_' + p.state);
+  $('scr-state').textContent = p.mic_ok ? t('state_line', { s: name, p: p.brightness }) : name;
+  $('scr-level').textContent = p.mic_ok ? t('level', { l: Math.round(p.level_db), th: Math.round(p.threshold_db) }) : '';
+  $('scr-cal').disabled = !p.mic_ok || p.calibrating;
+  $('scr-motion-box').hidden = p.imu_ok === false;          // no motion sensor: no option
+  if (!screenLoaded) {
+    screenLoaded = true;
+    $('scr-en').checked = p.enabled;
+    fillDur($('scr-dim'), DIM_CHOICES, p.dim_s);
+    fillDur($('scr-off'), OFF_CHOICES, p.dim_s + p.off_s);
+    $('scr-bright').value = p.bright_pct;
+    $('scr-dimpct').value = p.dim_pct;
+    $('scr-motion').checked = !!p.motion_wake;
+  }
+}
+function screenTexts() {                                    // the language changed: same choices, new words
+  fillDur($('scr-dim'), DIM_CHOICES, +$('scr-dim').value);
+  fillDur($('scr-off'), OFF_CHOICES, +$('scr-off').value);
+  if (screen) showScreen(screen);
+}
+
+$('scr-save').onclick = async () => {
+  const dim = +$('scr-dim').value, offTotal = +$('scr-off').value;
+  if (!(offTotal > dim)) { say(t('off_longer'), true); return; }
+  const body = { enabled: $('scr-en').checked, dim_s: dim, off_s: offTotal - dim, bright_pct: +$('scr-bright').value,
+                 dim_pct: +$('scr-dimpct').value, motion_wake: $('scr-motion').checked };
+  try {
+    const p = await api('/api/presence', body);
+    say(p.ok ? t('saved') : t('not_saved'), !p.ok);
+    screenLoaded = false;
+    showScreen(p);
+  } catch (e) { if (e.message !== 'key') say(t('failed', { e: e.message }), true); }
+};
+
+$('scr-cal').onclick = async () => {
+  try {
+    const p = await api('/api/calibrate', { seconds: 5 });
+    if (!p.ok) { say(t('cal_na'), true); return; }
+    say(t('cal_start'));
+    showScreen(p);
+  } catch (e) { if (e.message !== 'key') say(t('failed', { e: e.message }), true); }
+};
+
+async function pollScreen() {
+  try { showScreen(await api('/api/presence')); } catch (e) {}
+  setTimeout(pollScreen, screen && screen.calibrating ? 1000 : 3000);
+}
+
+async function poll() {
+  try { showUpdate(await api('/api/update')); } catch (e) {}
+  setTimeout(poll, lastUpdate && lastUpdate.state === 'downloading' ? 1000 : 5000);
+}
+
+loadInfo().then(() => { pollScreen(); scan(); poll(); }).catch(e => say(t('failed', { e: e.message }), true));
+</script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+# The project's Mac setup, tested on GitHub's macOS runner (no one here has a Mac): tools/mac/setup.sh on a fresh
+# machine, then everything a Mac user does except the board itself: the firmware build (forge.json's build_dir), the
+# host unit tests with Apple's clang, the harness's unit tests (the Python flash helper against a loopback port and a
+# fake board), the settings page tests. docs/MACOS.md. Releases don't depend on it.
+#
+# Runs on pushes to any branch but main (a branch is checked on a Mac at every push) and by hand.
+name: macOS
+
+on:
+  push:
+    branches-ignore: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]   # docs only: nothing to build or test on macOS
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    runs-on: macos-15                 # Apple Silicon, like a recent MacBook
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0              # tags, for the version label
+
+      - name: Setup script (tools/mac/setup.sh)
+        run: bash tools/mac/setup.sh
+
+      - name: Firmware build (docs/MACOS.md, "Build")
+        run: |
+          . "$(bash tools/mac/setup.sh --idf-dir)/export.sh"
+          B=$(python3 -c 'import json; print(json.load(open("forge.json"))["build_dir"])')
+          idf.py -B "$B" -D SDKCONFIG="$B/sdkconfig" build
+          ls -l "$B"/*.bin
+
+      - name: Host unit tests (Apple clang, AddressSanitizer)
+        run: make -C tests/host IDF_PATH="$(bash tools/mac/setup.sh --idf-dir)"   # its cJSON (test_presence)
+
+      - name: Harness unit tests + flash helper (loopback port, fake board; ESP-IDF's Python)
+        run: |
+          . "$(bash tools/mac/setup.sh --idf-dir)/export.sh"
+          python -m unittest discover -s tools/harness -p "test_*.py" -v
+          python tools/devloop/flash_helper.py ports
+          python tools/devloop/flash_helper.py stage
+          python tools/harness/harness.py --help > /dev/null
+
+      - name: Settings page tests (Playwright)
+        working-directory: tools/webtest
+        run: npm test
+
+      - name: "Doctor (informational, no board and no GitHub sign-in here)"
+        if: always()
+        run: bash tools/mac/doctor.sh || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        if: always()
+        with:
+          name: macos-webtest-shots
+          path: tools/webtest/shots/

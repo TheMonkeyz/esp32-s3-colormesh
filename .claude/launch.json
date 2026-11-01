@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "emulator",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8767", "--bind", "127.0.0.1", "--directory", "web/emu/build"],
+      "port": 8767
+    }
+  ]
+}

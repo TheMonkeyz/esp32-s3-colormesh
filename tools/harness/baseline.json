@@ -1,0 +1,162 @@
+{
+ "_comment": "Limits for tools/harness/harness.py (compare()): 'max' = higher is worse, 'min' = lower is worse; 'ref' = measured on the board. Set from espforge v0.1.0-rc.0 on the Waveshare AMOLED 1.75, October 4 2026 (4 full runs). Page swipes are plain LVGL scrolling, ~24 fps full-screen redraws: weather_amoled reached ~60 fps by drawing moves as pictures outside LVGL (docs/LESSONS.md, LVGL). After a deliberate change: --update-baseline, review, copy.",
+ "boot_s.ready": {
+  "max": 8,
+  "note": "v0.1.0-rc.0, measured",
+  "ref": 4.8
+ },
+ "drag_first_frame_ms": {
+  "max": 60,
+  "ref": 15,
+  "note": "the first frame of a swipe after the 10 px that make it a drag: ~15 ms with the neighbour's picture ready (rendered when idle), 35-45 when it had to be rendered then (v0.6.0: buffers on demand must not change this)"
+ },
+ "easy_connect_qr_s": {
+  "max": 4.0,
+  "ref": 2.55,
+  "note": "with the channel scan (restored in rc.5; skipping it gave ~0.15 s and was cleared of blame, L172) plus the setup AP held on the channel (L174); the placeholder covers the wait"
+ },
+ "failed_allocs": {
+  "max": 0,
+  "note": "must stay at its limit",
+  "ref": 0
+ },
+ "idle_internal_drop_kb": {
+  "max": 8,
+  "note": "must stay at its limit",
+  "ref": 0
+ },
+ "internal_free_kb": {
+  "min": 100,
+  "note": "v0.1.0-rc.0, measured",
+  "ref": 131
+ },
+ "internal_largest_kb": {
+  "min": 40,
+  "note": "v0.1.0-rc.0, measured",
+  "ref": 60
+ },
+ "internal_min_kb": {
+  "min": 90,
+  "note": "v0.1.0-rc.0, measured",
+  "ref": 128
+ },
+ "lvgl_internal_fallbacks": {
+  "max": 0,
+  "note": "must stay at its limit",
+  "ref": 0
+ },
+ "page_kb": {
+  "max": 22,
+  "note": "v0.3.0-rc.0: 17 KB measured with the Screen section (forge_presence)",
+  "ref": 17
+ },
+ "psram_min_kb": {
+  "min": 5000,
+  "note": "slide.c keeps 4 full-screen pictures (shadow, other, 2 neighbours: 1.7 MB)",
+  "ref": 6381
+ },
+ "reconnect_s": {
+  "max": 30,
+  "note": "v0.1.0-rc.0, measured",
+  "ref": 3.1
+ },
+ "setup_page_fps": {
+  "min": 40,
+  "ref": 69,
+  "note": "setup pages dragged as pictures (v0.1.1-slide.2)"
+ },
+ "snapshot_ms.hello": {
+  "max": 4000,
+  "note": "the first snapshot after a restart: TLS handshake included (3.1-3.4 s seen, Oct 4)",
+  "ref": 1916
+ },
+ "snapshot_ms.settings": {
+  "max": 2469,
+  "ref": 1646,
+  "note": "v0.5.0-settings.1, one run (forge_settings)"
+ },
+ "snapshot_ms.settings1": {
+  "max": 2222,
+  "ref": 1481,
+  "note": "v0.5.0-settings.1, one run (forge_settings)"
+ },
+ "snapshot_ms.settings2": {
+  "max": 2126,
+  "ref": 1417,
+  "note": "v0.5.0-settings.1, one run (forge_settings)"
+ },
+ "snapshot_ms.setup": {
+  "max": 3000,
+  "note": "v0.1.0-rc.0, measured",
+  "ref": 1528
+ },
+ "snapshot_ms.setup1": {
+  "max": 3000,
+  "note": "added with the setup1 screen; ref from the next measured run"
+ },
+ "snapshot_ms.system": {
+  "max": 3000,
+  "note": "v0.1.0-rc.0, measured",
+  "ref": 1660
+ },
+ "swipe_fps.drag_slow": {
+  "min": 50,
+  "note": "pictures (slide.c), v0.1.1-slide.2; LVGL scrolling was ~24",
+  "ref": 66
+ },
+ "swipe_fps.hello_to_system": {
+  "min": 50,
+  "note": "pictures (slide.c), v0.1.1-slide.2; LVGL scrolling was ~24",
+  "ref": 66
+ },
+ "swipe_fps.settings_scroll": {
+  "min": 40,
+  "ref": 60,
+  "note": "the Settings list dragged a half screen in 400 ms, drawn as pictures (v0.6.0); LVGL's own scrolling ran at ~25"
+ },
+ "swipe_fps.system_to_hello": {
+  "min": 50,
+  "note": "pictures (slide.c), v0.1.1-slide.2; LVGL scrolling was ~24",
+  "ref": 66
+ },
+ "swipe_gap_max_ms.drag_slow": {
+  "max": 80,
+  "note": "after the drag: LVGL repaints the page it landed on (same picture, 40-50 ms); during it 16 ms (slide: drag lines)",
+  "ref": 53
+ },
+ "swipe_gap_max_ms.hello_to_system": {
+  "max": 80,
+  "note": "after the drag: LVGL repaints the page it landed on (same picture, 40-50 ms); during it 16 ms (slide: drag lines)",
+  "ref": 58
+ },
+ "swipe_gap_max_ms.settings_scroll": {
+  "max": 120,
+  "ref": 40,
+  "note": "the edge's rows rendered once after the last frame, then LVGL takes the list back (v0.6.0)"
+ },
+ "swipe_gap_max_ms.system_to_hello": {
+  "max": 80,
+  "note": "after the drag: LVGL repaints the page it landed on (same picture, 40-50 ms); during it 16 ms (slide: drag lines)",
+  "ref": 60
+ },
+ "swipe_render_avg_ms.drag_slow": {
+  "max": 20,
+  "note": "pictures (slide.c), v0.1.1-slide.2",
+  "ref": 38.8
+ },
+ "swipe_render_avg_ms.hello_to_system": {
+  "max": 20,
+  "note": "pictures (slide.c), v0.1.1-slide.2",
+  "ref": 38.6
+ },
+ "swipe_render_avg_ms.settings_scroll": {
+  "max": 20,
+  "ref": 2,
+  "note": "the strip of rows coming in, rendered by LVGL each frame (v0.6.0)"
+ },
+ "swipe_render_avg_ms.system_to_hello": {
+  "max": 20,
+  "note": "pictures (slide.c), v0.1.1-slide.2",
+  "ref": 35.0
+ }
+}

@@ -1,0 +1,6 @@
+# Line endings (docs/MACOS.md): scripts and Makefiles are LF in the repository, so a Mac or Linux checkout gets working
+# ones (macOS's make 3.81 and bash choke on CR). Windows-only scripts keep CRLF in the working tree.
+*.sh        text eol=lf
+*.py        text eol=lf
+Makefile    text eol=lf
+*.bat       text eol=crlf
