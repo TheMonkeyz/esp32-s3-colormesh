@@ -14,6 +14,7 @@
 #include "config.h"
 #include "mesh.h"
 #include "console.h"
+#include "clip.h"
 #include "ui.h"
 
 static const char *TAG = "app";
@@ -38,6 +39,7 @@ void app_main(void)
     config_load();              // colour, dev mode, name, brightness (applied here)
     ui_init();
     mesh_start();               // NimBLE; reads config_get(), so after config_load()
+    clip_start();               // voice clips and calls: the microphones, the speaker (after mesh_start)
     console_init();             // the app's test console commands
     testcon_start();
     if (config_get()->has_color) ui_show_main();   // the ring is one swipe away; a fresh board starts on it

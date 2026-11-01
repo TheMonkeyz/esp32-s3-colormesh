@@ -74,7 +74,14 @@ USB Serial/JTAG, one command per line, answers are `test:` log lines (PROTOCOL.m
 `press X Y [ms]`, `swipe left|right|up|down`, `drag X1 Y1 X2 Y2 [ms]`, `screen [<name>]`, `power`; this app's
 `cfg`, `color RRGGBB`, `name <text>`, `devmode on|off`, `bright 0-100`, `peers`, `hold on|off`, `fwpull <addr>`,
 `fwinfo`, `fwloop`, `fwtune [window=N probe=KB scan=MS adv=0|1 rxscan=0|1 itvl=N mince=N maxce=N seq=0|1]`,
-`shot [screen] [div]`.
+`shot [screen] [div]`, `clip rec <ms>|send|play|info`, `ring [local|stop]`.
+
+- **Voice clips and calls** (three boards; only A's log is visible): on A, `clip rec 2000` records 2 s and sends it
+  (`clip: sent <id> in ~2200 ms, 0 data refused`); `clip play` plays it on A. For reception, ask the user to hold the
+  voice page of B or C and talk: A logs `mesh: clip <id> from <addr>`, then `clip: clip <id> from <origin> complete,
+  <bytes> bytes, 0 holes` and `clip: played …` (rc.3: 5 s, 40,000 bytes, 0 holes). `ring` on A: ask the user whether B
+  and C ring; a call from B or C shows `ui: overlay call` on A, a tap `clip: ring end after N, tapped`. The tone's
+  timing and spectrum are host-tested (`test_voice.c`); a WAV of it can be made on the PC from `main/ringtone.c`.
 
 - Simulated touches enter at the touch controller read, so wake-up, hold and gestures run the real code (L105). A tap
   lasts 120 ms (L30). `hold on` sets the hold flag the way a finger on `main` does, without the touch.

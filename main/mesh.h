@@ -84,6 +84,25 @@ bool mesh_synced(void);                                 // the host is synced (a
 // ...: the firmware pull's peripheral side). Return value ignored. NULL removes it. Runs in the NimBLE host task.
 typedef void (*mesh_gap_hook_t)(struct ble_gap_event *event);
 void mesh_set_gap_hook(mesh_gap_hook_t hook);
+// Extended advertising instances (CONFIG_BT_NIMBLE_EXT_ADV): 0 = the flood (legacy PDUs), 1 = a clip's periodic set.
+// The instance number is also the set's SID.
+#define MESH_ADV_FLOOD 0
+#define MESH_ADV_CLIP  1
+// ---- voice clips and calls (clip.c) ----
+// The own advert: clip id and length (bytes 26-27) with MP_F_CLIP while `on` (the periodic train runs)
+void mesh_set_clip(uint8_t id, uint8_t ds, bool on);
+// A call: effect MP_EFFECT_RING with a bumped effect seq for MESH_EFFECT_MS, like a wave ("mesh: ring from self")
+void mesh_start_ring(void);
+// Called from the mesh task: a peer advertises MP_F_CLIP with a clip id not handed over yet for its address; a peer's
+// new call (with its colour). Copy and return.
+typedef void (*mesh_clip_cb_t)(const uint8_t addr[6], uint8_t origin, uint8_t id, uint8_t ds);
+typedef void (*mesh_ring_cb_t)(uint8_t origin, uint8_t r, uint8_t g, uint8_t b);
+void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring);
+// The clip's periodic set on instance 1 (clip.c): start with the periodic interval in 1.25 ms units, change the
+// periodic data (any length up to 247), stop. Synchronous, under the radio lock. 0 = ok, else a NimBLE rc.
+int mesh_clip_adv_start(uint16_t per_itvl);
+int mesh_clip_adv_data(const uint8_t *data, int len);
+void mesh_clip_adv_stop(void);
 // Radio counters (risk 3 of docs/RESEARCH-BLE.md); also in the test console's "where" (ble_rep= ble_cm= ...)
 typedef struct {
     uint32_t reports_s, colormesh_s;    // reports per second over the last 10 s window

@@ -22,6 +22,7 @@
 #include "wave.h"
 #include "rps.h"
 #include "rps_icons.h"
+#include "clip.h"
 
 static const char *TAG = "ui";
 
@@ -58,10 +59,12 @@ extern const uint8_t ttf_start[] asm("_binary_montserrat_ttf_start");
 extern const uint8_t ttf_end[]   asm("_binary_montserrat_ttf_end");
 
 static lv_font_t *f_mid, *f_small, *f_tiny;
-enum { PG_PICK, PG_MAIN, PG_SYS, PG_GAME, PG_N };   // the pager's pages, left to right
-static const char *const page_name[PG_N] = { "pick", "main", "system", "game" };
+enum { PG_PICK, PG_MAIN, PG_SYS, PG_GAME, PG_VOICE, PG_N };   // the pager's pages, left to right
+static const char *const page_name[PG_N] = { "pick", "main", "system", "game", "voice" };
 
-static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *pg_game, *scr_msg;
+static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *pg_game, *pg_voice, *scr_msg;
+static lv_obj_t *v_ring, *v_arc, *v_title, *v_disc, *v_secs, *v_hint, *v_btn, *v_btn_l;
+static lv_obj_t *ov, *ov_ring, *ov_title, *ov_body;   // on the top layer: an incoming clip or call
 static lv_obj_t *g_ring, *g_arc, *g_title, *g_word, *g_hint, *g_icon[3], *g_sel, *g_big, *g_out, *g_peer[G_PEERS],
                 *g_pdot[G_PEERS];
 static lv_obj_t *p_title, *p_sub, *p_back, *p_sw[SW_N], *p_dot[SW_N];
@@ -355,6 +358,12 @@ static void main_released(lv_event_t *e) { hold_set(false); }
 // boards for every swipe). Only a hold from a finger: the console's "hold on" stays.
 static void drag_started(lv_obj_t *pg, void *user)
 {
+    clip_state_t cs;
+    clip_get_state(&cs);
+    if (cs.phase == CLIP_REC) {                // a swipe from the voice page: not a clip
+        ESP_LOGI(TAG, "record dropped (drag)");
+        clip_rec_end(false);
+    }
     if (!ui_hold) return;
     ESP_LOGI(TAG, "hold released (drag)");
     hold_set(false);
@@ -699,6 +708,164 @@ static void game_create_page(lv_obj_t *pg)
     game_refresh();
 }
 
+/* ---------- voice: hold to talk, the call button; the incoming clip or call on the top layer ---------- */
+
+#define V_DISC     150                        // the centre disc (own colour; red while recording)
+#define V_BTN_W    170
+#define V_BTN_H    56
+#define V_BTN_Y    326
+#define C_REC      lv_color_hex(0xFF3B30)
+#define CALL_SENT_MS 2000
+
+static int64_t call_sent_until;               // esp_timer us: "Call sent" until then
+static struct { int phase, tenths, pct; bool recv, sent; uint32_t own; } vlast = { .phase = -1 };
+
+static void voice_update(void)
+{
+    clip_state_t cs;
+    clip_get_state(&cs);
+    const app_cfg_t *c = config_get();
+    uint32_t own = (uint32_t)c->r << 16 | (uint32_t)c->g << 8 | c->b;
+    int tenths = (int)(cs.rec_ms / 100);
+    bool sent = esp_timer_get_time() < call_sent_until;
+    if (cs.phase == vlast.phase && tenths == vlast.tenths && cs.send_pct == vlast.pct && cs.receiving == vlast.recv &&
+        sent == vlast.sent && own == vlast.own)
+        return;
+    vlast.phase = cs.phase, vlast.tenths = tenths, vlast.pct = cs.send_pct, vlast.recv = cs.receiving;
+    vlast.sent = sent, vlast.own = own;
+
+    bool rec = cs.phase == CLIP_REC, sending = cs.phase == CLIP_SENDING;
+    lv_obj_set_style_border_color(v_ring, lv_color_hex(own), 0);
+    lv_obj_set_style_bg_color(v_disc, rec ? C_REC : lv_color_hex(own), 0);
+    set_hidden(v_arc, !rec && !sending);
+    if (rec) lv_arc_set_value(v_arc, (int)(cs.rec_ms * 100 / CLIP_REC_MAX_MS));
+    else if (sending) lv_arc_set_value(v_arc, cs.send_pct);
+    char buf[24] = "";
+    if (rec) snprintf(buf, sizeof(buf), tr(T_VOICE_SECONDS), tenths / 10, tenths % 10);
+    set_text(v_secs, buf);
+    lv_obj_set_style_text_color(v_secs, rec || bright(own) ? C_DARK : C_TEXT, 0);
+    set_hidden(v_secs, !rec);
+    int hint = sending ? T_VOICE_SENDING : cs.receiving ? T_VOICE_RECEIVING : sent ? T_CALL_SENT : T_VOICE_HINT;
+    set_text(v_hint, tr(hint));
+    set_text(v_title, tr(T_VOICE_TITLE));
+    set_text(v_btn_l, tr(T_CALL));
+}
+
+static void voice_refresh(void)
+{
+    vlast.phase = -1;
+    voice_update();
+}
+
+static void voice_pressed(lv_event_t *e)
+{
+    if (!page_shown(PG_VOICE)) return;
+    clip_rec_begin();
+}
+
+static void voice_released(lv_event_t *e) { clip_rec_end(true); }
+static void voice_lost(lv_event_t *e) { clip_rec_end(false); }
+
+static void call_tapped(lv_event_t *e)
+{
+    if (!slide_tap_ok() || !page_shown(PG_VOICE)) return;
+    ESP_LOGI(TAG, "call tapped");
+    clip_ring();
+    call_sent_until = esp_timer_get_time() + CALL_SENT_MS * 1000LL;
+    voice_update();
+}
+
+static void voice_create_page(lv_obj_t *pg)
+{
+    lv_obj_add_flag(pg, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(pg, voice_pressed, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(pg, voice_released, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(pg, voice_lost, LV_EVENT_PRESS_LOST, NULL);
+    v_ring = shape(pg, DISP_W);
+    lv_obj_set_style_border_width(v_ring, RING_W, 0);
+    lv_obj_set_style_border_opa(v_ring, LV_OPA_COVER, 0);
+    lv_obj_center(v_ring);
+
+    v_arc = lv_arc_create(pg);                // the recording's 5 s, then the sending, over the ring
+    lv_obj_set_size(v_arc, DISP_W, DISP_H);
+    lv_obj_center(v_arc);
+    lv_arc_set_rotation(v_arc, 270);
+    lv_arc_set_bg_angles(v_arc, 0, 360);
+    lv_arc_set_range(v_arc, 0, 100);
+    lv_obj_set_style_arc_opa(v_arc, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(v_arc, RING_W, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(v_arc, lv_color_white(), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(v_arc, false, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(v_arc, LV_OPA_TRANSP, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(v_arc, 0, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(v_arc, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(v_arc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(v_arc, LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_HIDDEN);
+
+    v_disc = shape(pg, V_DISC);
+    lv_obj_set_style_bg_opa(v_disc, LV_OPA_COVER, 0);
+    lv_obj_set_pos(v_disc, CX - V_DISC / 2, 150 - V_DISC / 2);
+    v_secs = label(v_disc, f_mid, C_DARK, 0, V_DISC);
+    lv_obj_center(v_secs);
+    v_title = label(pg, f_tiny, C_DIM, 42, 220);
+    v_hint = label(pg, f_small, C_HINT, 248, 300);
+
+    v_btn = lv_button_create(pg);             // its own taps: no press bubbles to the page (no recording)
+    lv_obj_set_size(v_btn, V_BTN_W, V_BTN_H);
+    lv_obj_set_pos(v_btn, CX - V_BTN_W / 2, V_BTN_Y);
+    lv_obj_set_style_radius(v_btn, V_BTN_H / 2, 0);
+    lv_obj_set_style_bg_color(v_btn, lv_color_hex(0x2BB24C), 0);
+    lv_obj_set_style_shadow_width(v_btn, 0, 0);
+    lv_obj_add_flag(v_btn, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(v_btn, call_tapped, LV_EVENT_SHORT_CLICKED, NULL);
+    v_btn_l = label(v_btn, f_small, C_TEXT, 0, V_BTN_W);
+    lv_obj_center(v_btn_l);
+    voice_refresh();
+}
+
+static void overlay_tapped(lv_event_t *e)
+{
+    ESP_LOGI(TAG, "overlay tapped");
+    clip_ring_stop();
+}
+
+static void overlay_create(void)
+{
+    ov = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(ov);
+    lv_obj_set_size(ov, DISP_W, DISP_H);
+    lv_obj_set_style_bg_color(ov, C_BG, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
+    lv_obj_add_flag(ov, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, overlay_tapped, LV_EVENT_CLICKED, NULL);
+    ov_ring = shape(ov, DISP_W);
+    lv_obj_set_style_border_width(ov_ring, RING_W * 2, 0);
+    lv_obj_set_style_border_opa(ov_ring, LV_OPA_COVER, 0);
+    lv_obj_center(ov_ring);
+    ov_title = label(ov, f_mid, C_TEXT, 170, 320);
+    ov_body = label(ov, f_small, C_DIM, 230, 300);
+}
+
+// Shown while a clip plays or a call rings (any screen), in the sender's colour
+static void overlay_update(void)
+{
+    clip_state_t cs;
+    clip_get_state(&cs);
+    bool on = cs.phase == CLIP_PLAYING || cs.phase == CLIP_RINGING;
+    bool shown = !lv_obj_has_flag(ov, LV_OBJ_FLAG_HIDDEN);
+    if (on) {
+        lv_obj_set_style_border_color(ov_ring, lv_color_make(cs.r, cs.g, cs.b), 0);
+        bool call = cs.phase == CLIP_RINGING;
+        set_text(ov_title, tr(call ? T_CALL_IN : T_MSG_IN));
+        set_text(ov_body, tr(call ? T_CALL_STOP : T_MSG_PLAYING));
+    }
+    if (on == shown) return;
+    set_hidden(ov, !on);
+    ESP_LOGI(TAG, "overlay %s", on ? (cs.phase == CLIP_RINGING ? "call" : "message") : "off");
+    if (!on) lv_obj_invalidate(lv_screen_active());
+}
+
 /* ---------- the wave loop ----------
  * While mesh_waves() has a wave and main is the page shown with no slide running (slide_tap_ok), the screen is a
  * raw frame (display_raw_frame, tear-free like the slides) filled by wave_fill, up to 30 fps, from an LVGL timer: in
@@ -748,7 +915,7 @@ static void wave_tick(lv_timer_t *t)
 {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
     int n = wave_ok ? mesh_waves(wf.w, WAVE_MAX, now) : 0;
-    if (n <= 0 || !page_shown(PG_MAIN) || !slide_tap_ok()) {
+    if (n <= 0 || !page_shown(PG_MAIN) || !slide_tap_ok() || !lv_obj_has_flag(ov, LV_OBJ_FLAG_HIDDEN)) {
         if (wl.drawing) wave_stop(n > 0 ? "paused" : "end");
         return;
     }
@@ -792,7 +959,9 @@ static void fast_tick(lv_timer_t *t)
         main_update(false);
         pick_update();
         game_update();
+        voice_update();
     }
+    overlay_update();
 }
 
 // Every second while the pager is shown: the system page (shown, or the neighbour a swipe will show a picture of)
@@ -807,6 +976,7 @@ static void page_settled(int page, void *user)
     if (page == PG_SYS) system_refresh();
     else if (page == PG_MAIN) main_update(false);
     else if (page == PG_GAME) game_refresh();
+    else if (page == PG_VOICE) voice_refresh();
     else pick_refresh();
 }
 
@@ -819,10 +989,12 @@ static void pager_create_screen(void)
     pg_main = pager_page(pager, PG_MAIN);
     pg_sys = pager_page(pager, PG_SYS);
     pg_game = pager_page(pager, PG_GAME);
+    pg_voice = pager_page(pager, PG_VOICE);
     pick_create_page(pg_pick);
     main_create_page(pg_main);
     system_create_page(pg_sys);
     game_create_page(pg_game);
+    voice_create_page(pg_voice);
 }
 
 /* ---------- message ---------- */
@@ -866,6 +1038,12 @@ static void show_game_locked(void)
     show_page_locked(PG_GAME);
 }
 
+static void show_voice_locked(void)
+{
+    voice_refresh();
+    show_page_locked(PG_VOICE);
+}
+
 static void show_msg_locked(void) { if (lv_screen_active() != scr_msg) lv_screen_load(scr_msg); }
 
 static bool page_shown(int page) { return lv_screen_active() == scr_pager && pager_current(pager) == page; }
@@ -874,11 +1052,13 @@ static lv_obj_t *get_pick(void) { return pg_pick; }
 static lv_obj_t *get_main(void) { return pg_main; }
 static lv_obj_t *get_sys(void) { return pg_sys; }
 static lv_obj_t *get_game(void) { return pg_game; }
+static lv_obj_t *get_voice(void) { return pg_voice; }
 static lv_obj_t *get_msg(void) { return scr_msg; }
 static bool shown_pick(void) { return page_shown(PG_PICK); }
 static bool shown_main(void) { return page_shown(PG_MAIN); }
 static bool shown_sys(void) { return page_shown(PG_SYS); }
 static bool shown_game(void) { return page_shown(PG_GAME); }
+static bool shown_voice(void) { return page_shown(PG_VOICE); }
 static bool shown_msg(void) { return lv_screen_active() == scr_msg; }
 
 static const screen_def_t screens[] = {
@@ -886,6 +1066,7 @@ static const screen_def_t screens[] = {
     { "main",    get_main, show_main_locked,   main_refresh,   shown_main },
     { "system",  get_sys,  show_system_locked, system_refresh, shown_sys },
     { "game",    get_game, show_game_locked,   game_refresh,   shown_game },
+    { "voice",   get_voice, show_voice_locked, voice_refresh,  shown_voice },
     { "message", get_msg,  show_msg_locked,    NULL,           shown_msg },
 };
 
@@ -908,6 +1089,7 @@ void ui_init(void)
     f_tiny = mkfont(14);
     pager_create_screen();
     msg_create();
+    overlay_create();
     screens_register(screens, sizeof(screens) / sizeof(screens[0]));
     set_text(m_title, "ColorMesh");
     set_text(m_body, tr(T_STARTING));
@@ -949,5 +1131,6 @@ void ui_texts_changed(void)
     main_update(true);
     system_refresh();
     game_refresh();
+    voice_refresh();
     display_unlock();
 }

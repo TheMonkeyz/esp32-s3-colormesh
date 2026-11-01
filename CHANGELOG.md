@@ -5,6 +5,15 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.3 - 2026-11-01
+- Voice clips: swipe to the last page ("Voice"), hold the screen and talk (up to 5 s), let go. Every board in range
+  gets the clip at the same time and plays it at once, with "Message" in your colour.
+- Call: the green Call button on the same page makes every other board ring with the classic phone tune and show
+  "Incoming call" in your colour; touch the screen to stop it.
+- Console: `clip rec <ms>`, `clip send`, `clip play`, `clip info`, `ring`, `ring local`, `ring stop`.
+- Bluetooth now uses extended advertising (the colour flood sends the same packets as before; older boards still
+  hear it). Needs this version on every board for clips and calls.
+
 ## v0.5.0-rc.3 - 2026-11-01
 - Rock paper scissors: the title at the top of the game page sits lower, clear of the coloured ring.
 

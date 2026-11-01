@@ -71,6 +71,16 @@ static QueueHandle_t q, q_other;
 static volatile bool refresh_req;
 static volatile uint32_t mix_packed;    // 0x00rrggbb of the last mix
 static volatile mesh_gap_hook_t gap_hook;
+static volatile mesh_clip_cb_t clip_cb;     // clip.c: a peer announced a new clip
+static volatile mesh_ring_cb_t ring_cb;     // clip.c: a peer calls
+
+// Voice clips: the own bytes 26-27 and MP_F_CLIP; per peer address the last clip id handed to clip_cb
+static volatile uint8_t own_clip_id, own_clip_ds;
+static volatile bool own_clip_on;
+static struct {
+    uint8_t addr[6], id;
+    bool used;
+} clip_seen[MP_MAX_PEERS];                  // mesh task only
 
 // Waves (mesh_start_wave): the own effect bytes in the advert, the waves running here, the peers' last effect seen
 static volatile uint8_t own_effect, own_effect_seq, effect_kind_req;
@@ -144,31 +154,44 @@ static uint8_t ota_flags(void)
 
 // ---- GAP events (NimBLE host task) ----
 
+// One advertising report (legacy or extended scan): copy a ColorMesh payload into the queue
+static void on_report(const ble_addr_t *addr, int8_t rssi, uint8_t evt, const uint8_t *data, uint8_t len)
+{
+    int64_t t0 = esp_timer_get_time();
+    n_reports++;
+    const struct ble_hs_adv_field *f;
+    if (ble_hs_adv_find_field(BLE_HS_ADV_TYPE_MFG_DATA, data, len, &f) == 0 &&
+        f->length - 1 == MP_MFG_LEN && f->value[2] == MP_PROTO) {
+        report_t r;
+        memcpy(r.addr, addr->val, 6);
+        r.rssi = rssi;
+        r.len = MP_MFG_LEN;
+        memcpy(r.mfg, f->value, MP_MFG_LEN);       // desc->data points into the HCI buffer: copy now
+        n_cm++;
+        if (xQueueSend(q, &r, 0) != pdTRUE) n_drops++;
+    } else if (dbg_other) {
+        other_t o = { .addr_type = addr->type, .evt = evt, .len = len, .rssi = rssi };
+        memcpy(o.addr, addr->val, 6);
+        xQueueSend(q_other, &o, 0);
+    }
+    uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+    if (us > cb_us_max) cb_us_max = us;
+}
+
 static int gap_event(struct ble_gap_event *e, void *arg)
 {
     if (e->type == BLE_GAP_EVENT_DISC) {             // the hot path: copy and return, nothing logged
-        int64_t t0 = esp_timer_get_time();
-        n_reports++;
-        const struct ble_hs_adv_field *f;
-        if (ble_hs_adv_find_field(BLE_HS_ADV_TYPE_MFG_DATA, e->disc.data, e->disc.length_data, &f) == 0 &&
-            f->length - 1 == MP_MFG_LEN && f->value[2] == MP_PROTO) {
-            report_t r;
-            memcpy(r.addr, e->disc.addr.val, 6);
-            r.rssi = e->disc.rssi;
-            r.len = MP_MFG_LEN;
-            memcpy(r.mfg, f->value, MP_MFG_LEN);   // desc->data points into the HCI buffer: copy now
-            n_cm++;
-            if (xQueueSend(q, &r, 0) != pdTRUE) n_drops++;
-        } else if (dbg_other) {
-            other_t o = { .addr_type = e->disc.addr.type, .evt = e->disc.event_type, .len = e->disc.length_data,
-                          .rssi = e->disc.rssi };
-            memcpy(o.addr, e->disc.addr.val, 6);
-            xQueueSend(q_other, &o, 0);
-        }
-        uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
-        if (us > cb_us_max) cb_us_max = us;
+        on_report(&e->disc.addr, e->disc.rssi, e->disc.event_type, e->disc.data, e->disc.length_data);
         return 0;
     }
+#if MYNEWT_VAL(BLE_EXT_ADV)
+    if (e->type == BLE_GAP_EVENT_EXT_DISC) {         // with extended advertising on, every report comes this way
+        const struct ble_gap_ext_disc_desc *d = &e->ext_disc;
+        if (d->props & BLE_HCI_ADV_LEGACY_MASK)      // a clip's own set is not legacy: the controller syncs to it
+            on_report(&d->addr, d->rssi, d->legacy_event_type, d->data, d->length_data);
+        return 0;
+    }
+#endif
     mesh_gap_hook_t hook = gap_hook;
     if (hook) hook(e);
     switch (e->type) {
@@ -179,7 +202,7 @@ static int gap_event(struct ble_gap_event *e, void *arg)
     case BLE_GAP_EVENT_ADV_COMPLETE:                // advertising ended (a central connected, or it was stopped)
     case BLE_GAP_EVENT_CONNECT:                     // a central connected to our connectable advertisement
     case BLE_GAP_EVENT_DISCONNECT:
-        wake();                                     // the mesh task checks ble_gap_adv_active() and restarts
+        wake();                                     // the mesh task checks adv_active() and restarts
         break;
     default:
         break;
@@ -189,23 +212,59 @@ static int gap_event(struct ble_gap_event *e, void *arg)
 
 // ---- radio (radio_lock held) ----
 
-static void adv_start_locked(void)
+#if MYNEWT_VAL(BLE_EXT_ADV)
+// The flood is extended advertising instance 0 with legacy PDUs: on air the same ADV_NONCONN_IND / ADV_IND as before,
+// so boards on older firmware still hear it. Instance 1 is the clip's periodic set (mesh_clip_adv_*).
+static int adv_data_locked(void)
+{
+    struct os_mbuf *m = os_msys_get_pkthdr(MP_AD_SIZE, 0);
+    if (!m) return BLE_HS_ENOMEM;
+    int rc = os_mbuf_append(m, adv_buf, MP_AD_SIZE);
+    if (rc) { os_mbuf_free_chain(m); return rc; }
+    return ble_gap_ext_adv_set_data(MESH_ADV_FLOOD, m);   // takes the mbuf, even on failure
+}
+
+static int adv_begin_locked(uint16_t itvl)
+{
+    struct ble_gap_ext_adv_params p = { 0 };
+    p.legacy_pdu = 1;
+    p.connectable = p.scannable = connectable;    // legacy connectable = ADV_IND (connectable + scannable)
+    p.itvl_min = p.itvl_max = itvl;
+    p.own_addr_type = own_addr_type;
+    p.primary_phy = p.secondary_phy = BLE_HCI_LE_PHY_1M;
+    p.sid = MESH_ADV_FLOOD;
+    int rc = ble_gap_ext_adv_configure(MESH_ADV_FLOOD, &p, NULL, gap_event, NULL);
+    if (rc) return rc;
+    if ((rc = adv_data_locked()) != 0) ESP_LOGW(TAG_BLE, "adv_set_data rc=%d", rc);
+    return ble_gap_ext_adv_start(MESH_ADV_FLOOD, 0, 0);
+}
+static bool adv_active(void) { return ble_gap_ext_adv_active(MESH_ADV_FLOOD); }
+#else
+static int adv_data_locked(void) { return ble_gap_adv_set_data(adv_buf, MP_AD_SIZE); }
+
+static int adv_begin_locked(uint16_t itvl)
 {
     struct ble_gap_adv_params p = { 0 };
     p.conn_mode = connectable ? BLE_GAP_CONN_MODE_UND : BLE_GAP_CONN_MODE_NON;
     p.disc_mode = BLE_GAP_DISC_MODE_NON;
     int rc = ble_gap_adv_set_data(adv_buf, MP_AD_SIZE);
     if (rc) ESP_LOGW(TAG_BLE, "adv_set_data rc=%d", rc);
-    uint16_t itvl = adv_fallback ? ADV_ITVL_SLOW : ADV_ITVL_FAST;
     p.itvl_min = p.itvl_max = itvl;
-    rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER, &p, gap_event, NULL);
+    return ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER, &p, gap_event, NULL);
+}
+static bool adv_active(void) { return ble_gap_adv_active(); }
+#endif
+
+static void adv_start_locked(void)
+{
+    uint16_t itvl = adv_fallback ? ADV_ITVL_SLOW : ADV_ITVL_FAST;
+    int rc = adv_begin_locked(itvl);
     if (rc && rc != BLE_HS_EALREADY && !adv_fallback) {
         ESP_LOGW(TAG_BLE, "adv_start rc=%d", rc);
         ESP_LOGW(TAG_BLE, "20 ms advertising refused: falling back to 100 ms (0xA0)");
         adv_fallback = true;
         itvl = ADV_ITVL_SLOW;
-        p.itvl_min = p.itvl_max = itvl;
-        rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER, &p, gap_event, NULL);
+        rc = adv_begin_locked(itvl);
     }
     if (rc && rc != BLE_HS_EALREADY) {
         ESP_LOGW(TAG_BLE, "adv_start rc=%d (retry in %d ms)", rc, RETRY_MS);
@@ -219,8 +278,12 @@ static void adv_start_locked(void)
 
 static void adv_stop_locked(void)
 {
-    if (ble_gap_adv_active()) {
+    if (adv_active()) {
+#if MYNEWT_VAL(BLE_EXT_ADV)
+        int rc = ble_gap_ext_adv_stop(MESH_ADV_FLOOD);
+#else
         int rc = ble_gap_adv_stop();
+#endif
         if (rc && rc != BLE_HS_EALREADY) ESP_LOGW(TAG_BLE, "adv_stop rc=%d", rc);
     }
     adv_on = false;
@@ -256,7 +319,7 @@ static void radio_check(void)
     if (!synced) return;
     int64_t now = esp_timer_get_time();
     xSemaphoreTake(radio_lock, portMAX_DELAY);
-    if (adv_on && !ble_gap_adv_active()) { adv_on = false; adv_itvl = 0; }
+    if (adv_on && !adv_active()) { adv_on = false; adv_itvl = 0; }
     if (!adv_paused && !adv_on && now >= adv_retry_us) adv_start_locked();
     if (scan_on && !ble_gap_disc_active()) scan_on = false;
     if (!scan_paused && !scan_on && now >= scan_retry_us) scan_start_locked();
@@ -273,7 +336,9 @@ static void do_refresh(void)
     s.origin = own_origin;
     s.seq = ++seq;
     s.ttl = 0;
-    s.flags = (dev_mode ? MP_F_DEV : 0) | (admin ? MP_F_ADMIN : 0) | ota_flags();
+    s.flags = (dev_mode ? MP_F_DEV : 0) | (admin ? MP_F_ADMIN : 0) | (own_clip_on ? MP_F_CLIP : 0) | ota_flags();
+    s.clip_id = own_clip_id;
+    s.clip_ds = own_clip_ds;
     s.r = own_r;
     s.g = own_g;
     s.b = own_b;
@@ -303,7 +368,7 @@ static void do_refresh(void)
     xSemaphoreTake(radio_lock, portMAX_DELAY);
     memcpy(adv_buf, buf, sizeof(adv_buf));
     if (adv_on) {
-        int rc = ble_gap_adv_set_data(adv_buf, MP_AD_SIZE);
+        int rc = adv_data_locked();
         if (rc) ESP_LOGW(TAG_BLE, "adv_set_data rc=%d", rc);
     }
     xSemaphoreGive(radio_lock);
@@ -426,6 +491,12 @@ static void peer_effect(const uint8_t addr[6], const mp_state_t *st, uint32_t no
     eff[k].seq = st->effect_seq;
     fmt_addr(a, sizeof(a), addr);
     ESP_LOGD(TAG_BLE, "effect %s %u (seq %u)", a, st->effect, st->effect_seq);
+    if (st->effect == MP_EFFECT_RING) {
+        ESP_LOGI(TAG, "ring from %s", a);
+        mesh_ring_cb_t cb = ring_cb;
+        if (cb) cb(st->origin, st->r, st->g, st->b);
+        return;
+    }
     if (st->effect > WAVE_BOTTOM) return;             // a kind this build does not know
     xSemaphoreTake(table_lock, portMAX_DELAY);
     uint32_t b2 = (st->b2r | st->b2g | st->b2b) ? 0x01000000u | (uint32_t)st->b2r << 16 | (uint32_t)st->b2g << 8 | st->b2b
@@ -434,6 +505,28 @@ static void peer_effect(const uint8_t addr[6], const mp_state_t *st, uint32_t no
     xSemaphoreGive(table_lock);
     char note[12];
     ESP_LOGI(TAG, "wave %s from %s%s", mesh_wave_name(st->effect), a, b2_note(note, b2));
+}
+
+// One decoded report: a peer that advertises MP_F_CLIP with a clip id not handed over yet for its address goes to
+// clip_cb once (the oldest slot is reused when the table is full)
+static void clip_peer(const uint8_t addr[6], const mp_state_t *st)
+{
+    if (!(st->flags & MP_F_CLIP)) return;
+    int k = -1, free_k = -1;
+    for (int i = 0; i < MP_MAX_PEERS && k < 0; i++) {
+        if (clip_seen[i].used && !memcmp(clip_seen[i].addr, addr, 6)) k = i;
+        else if (!clip_seen[i].used && free_k < 0) free_k = i;
+    }
+    if (k >= 0 && clip_seen[k].id == st->clip_id) return;
+    if (k < 0) k = free_k >= 0 ? free_k : (int)(st->origin % MP_MAX_PEERS);
+    clip_seen[k].used = true;
+    clip_seen[k].id = st->clip_id;
+    memcpy(clip_seen[k].addr, addr, 6);
+    char a[18];
+    fmt_addr(a, sizeof(a), addr);
+    ESP_LOGI(TAG, "clip %u from %s, %u.%u s", st->clip_id, a, st->clip_ds / 10, st->clip_ds % 10);
+    mesh_clip_cb_t cb = clip_cb;
+    if (cb) cb(addr, st->origin, st->clip_id, st->clip_ds);
 }
 
 // One decoded report: a new round with time left is joined (rps_join decides), with the reveal at the time heard
@@ -522,6 +615,7 @@ static void mesh_task(void *arg)
                 xSemaphoreGive(table_lock);
                 peer_effect(r.addr, &st, now_ms());
                 game_peer(r.addr, &st, now_ms());
+                clip_peer(r.addr, &st);
             } while (xQueueReceive(q, &r, 0) == pdTRUE);
         }
         if (effect_req) {                                // mesh_start_wave: the effect into the advert, for 1 s
@@ -870,6 +964,29 @@ void mesh_start_wave(uint8_t kind)
     wake();
 }
 
+void mesh_start_ring(void)
+{
+    ESP_LOGI(TAG, "ring from self");
+    effect_kind_req = MP_EFFECT_RING;
+    effect_req = true;
+    wake();
+}
+
+void mesh_set_clip(uint8_t id, uint8_t ds, bool on)
+{
+    own_clip_id = id;
+    own_clip_ds = ds;
+    own_clip_on = on;
+    refresh_req = true;
+    wake();
+}
+
+void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring)
+{
+    clip_cb = clip;
+    ring_cb = ring;
+}
+
 int mesh_waves(wave_t *out, int max, uint32_t now_ms)
 {
     if (!table_lock || !out || max <= 0) return 0;
@@ -935,6 +1052,58 @@ uint8_t mesh_own_addr_type(void) { return own_addr_type; }
 bool mesh_synced(void) { return synced; }
 
 void mesh_set_gap_hook(mesh_gap_hook_t hook) { gap_hook = hook; }
+
+#if MYNEWT_VAL(BLE_EXT_ADV) && MYNEWT_VAL(BLE_PERIODIC_ADV)
+// Instance 1: a non-connectable, non-scannable extended set every 100 ms (it carries only the sync info) on 1M, its
+// periodic train on 2M (shorter packets)
+int mesh_clip_adv_start(uint16_t per_itvl)
+{
+    if (!synced) return BLE_HS_ENOTSYNCED;
+    struct ble_gap_ext_adv_params p = { 0 };
+    p.itvl_min = p.itvl_max = 0xA0;
+    p.own_addr_type = own_addr_type;
+    p.primary_phy = BLE_HCI_LE_PHY_1M;
+    p.secondary_phy = BLE_HCI_LE_PHY_2M;
+    p.sid = MESH_ADV_CLIP;
+    struct ble_gap_periodic_adv_params pp = { 0 };
+    pp.itvl_min = pp.itvl_max = per_itvl;
+    xSemaphoreTake(radio_lock, portMAX_DELAY);
+    if (ble_gap_ext_adv_active(MESH_ADV_CLIP)) ble_gap_ext_adv_stop(MESH_ADV_CLIP);
+    int rc = ble_gap_ext_adv_configure(MESH_ADV_CLIP, &p, NULL, gap_event, NULL);
+    if (!rc) rc = ble_gap_periodic_adv_configure(MESH_ADV_CLIP, &pp);
+    if (!rc) rc = ble_gap_periodic_adv_start(MESH_ADV_CLIP);
+    if (!rc) rc = ble_gap_ext_adv_start(MESH_ADV_CLIP, 0, 0);
+    xSemaphoreGive(radio_lock);
+    if (rc) ESP_LOGW(TAG_BLE, "clip adv start rc=%d", rc);
+    else ESP_LOGI(TAG_BLE, "clip periodic set up, %u.%02u ms", per_itvl * 5u / 4u, per_itvl * 125u % 100u);
+    return rc;
+}
+
+int mesh_clip_adv_data(const uint8_t *data, int len)
+{
+    struct os_mbuf *m = os_msys_get_pkthdr(len, 0);
+    if (!m) return BLE_HS_ENOMEM;
+    int rc = os_mbuf_append(m, data, len);
+    if (rc) { os_mbuf_free_chain(m); return rc; }
+    xSemaphoreTake(radio_lock, portMAX_DELAY);
+    rc = ble_gap_periodic_adv_set_data(MESH_ADV_CLIP, m);
+    xSemaphoreGive(radio_lock);
+    return rc;
+}
+
+void mesh_clip_adv_stop(void)
+{
+    xSemaphoreTake(radio_lock, portMAX_DELAY);
+    ble_gap_periodic_adv_stop(MESH_ADV_CLIP);
+    if (ble_gap_ext_adv_active(MESH_ADV_CLIP)) ble_gap_ext_adv_stop(MESH_ADV_CLIP);
+    xSemaphoreGive(radio_lock);
+    ESP_LOGI(TAG_BLE, "clip periodic set down");
+}
+#else
+int mesh_clip_adv_start(uint16_t per_itvl) { return BLE_HS_ENOTSUP; }
+int mesh_clip_adv_data(const uint8_t *data, int len) { return BLE_HS_ENOTSUP; }
+void mesh_clip_adv_stop(void) {}
+#endif
 
 void mesh_get_stats(mesh_stats_t *out)
 {
