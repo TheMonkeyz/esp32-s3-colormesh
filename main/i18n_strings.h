@@ -10,9 +10,28 @@ X(T_STARTING,       "Starting...",                 "Démarrage...")
 
 // Pick screen
 X(T_PICK_COLOUR,    "Pick your colour",            "Choisissez votre couleur")
-X(T_TAP_ONE,        "Tap one",                     "Touchez-en une")
+X(T_TAP_ONE,        "Tap one",                     "Touchez une pastille")
 
-// Main screen
-X(T_HOLD_HINT,      "Hold to send\nyour colour",   "Gardez le doigt\npour envoyer votre couleur")
-X(T_NEAR,           "%d near  ·  v%s",             "%d à proximité  ·  v%s")
+// Main screen (the version string already starts with "v")
+X(T_HOLD_HINT,      "Touch the screen to send your colour", "Toucher l'écran pour envoyer votre couleur")
+X(T_NEAR,           "%d near  ·  %s",              "%d à portée  ·  %s")
 X(T_DEV,            "DEV",                         "DEV")
+
+// System page
+X(T_SYSTEM,         "System",                      "Système")
+X(T_SYS_VERSION,    "Version %s",                  "Version %s")
+X(T_SYS_BT,         "Bluetooth %s",                "Bluetooth %s")
+X(T_SYS_NAME,       "Name: %s",                    "Nom : %s")
+X(T_SYS_NO_NAME,    "(none)",                      "(aucun)")
+X(T_SYS_DEV,        "Dev mode: %s",                "Mode développeur : %s")
+X(T_ON,             "on",                          "activé")
+X(T_OFF,            "off",                         "désactivé")
+X(T_SYS_MEMORY,     "Memory %u KB · PSRAM %u KB",  "Mémoire %u Ko · PSRAM %u Ko")
+X(T_SYS_UPTIME,     "Running for %s",              "En marche depuis %s")
+X(T_UP_MIN,         "%d min",                      "%d min")
+X(T_UP_H,           "%d h %02d",                   "%d h %02d")
+X(T_UP_D,           "%d d %d h",                   "%d j %d h")
+X(T_SYS_PEERS,      "Boards near: %d",             "Appareils à portée : %d")
+X(T_SYS_NO_PEERS,   "No board heard yet",          "Aucun appareil entendu")
+X(T_PEER_HOLD,      "sending",                     "envoie")
+X(T_PEER_IDLE,      "idle",                        "au repos")

@@ -97,6 +97,7 @@ Add each preference the user states (gestures, wording, timing, look) with the d
 - 2026-10-31: screen texts in the **vous** form with an infinitive: the main screen's hint is
   "Toucher l'écran pour envoyer votre couleur" / "Touch the screen to send your colour" (the user replaced
   "Gardez le doigt pour envoyer votre couleur"); the pick screen "Choisissez votre couleur" / "Touchez une pastille".
+- 2026-10-31: the peer count on the main screen reads "N à portée" in French (not "N proches"); English "N near".
 
 
 ## Useful facts
