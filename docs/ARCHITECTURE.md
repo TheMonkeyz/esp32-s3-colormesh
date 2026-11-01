@@ -263,8 +263,10 @@ from an ARGB8888 snapshot of the page (868 KB PSRAM, allocated at the first wave
 edge ring hidden (the frame draws the ring). The snapshot is taken at the loop's start and every 200 ms (a countdown,
 a press); each row's span of visible pixels is kept so only those are blended. LVGL's own redraws are off while the
 loop draws there (`lv_display_enable_invalidation`) and back on at its end. Measured on A: picture 43-45 ms, fill
-10-14 ms a frame, 24.5-24.8 fps (main alone: 29). `shot wave` includes the page. Grey hint texts are hard to read
-over bright waves.
+10-14 ms a frame, 24.5-24.8 fps (main alone: 29). `shot wave` includes the page. The texts there are white with a
+black outline (`olabel`: 8 black copies 2 px around, the white one on top; `set_text` / `set_hidden` act on all) and
+the swatches have a 2 px black edge, both the user's choice (rc.12). The outlines made a picture slower: it is now
+refreshed every 200 ms only during a game round or within 1 s of a touch, else every second (rc.12: 26-27 fps).
 
 ### Rock paper scissors (main/rps.c, mesh.c, ui.c; v0.5.0)
 

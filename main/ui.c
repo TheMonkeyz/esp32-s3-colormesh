@@ -47,7 +47,8 @@ static const char *TAG = "ui";
 #define SW_N       12                         // pick: swatches
 #define SW_R       22
 #define SW_RING    180
-#define SW_DOT_R   6                          // pick: the inner dot on the swatch chosen as the waves' colour B
+#define SW_EDGE    2                          // pick: the black edge of every swatch (the user's, 2026-11-01)
+#define SW_DOT_R   6                         // pick: the inner dot on the swatch chosen as the waves' colour B
 #define SYS_ROWS   6                          // system: peers listed
 #define HOLD_IDLE_MS 150                      // safety net: no finger for this long = released
 #define TAP_CENTRE_R 100                      // main: a tap this close to the centre starts rings, else bands
@@ -114,6 +115,36 @@ static lv_obj_t *label(lv_obj_t *parent, lv_font_t *f, lv_color_t c, int y, int 
     return l;
 }
 
+/* White text with a black outline, readable over the waves behind pick, voice and game (the user's choice,
+ * 2026-11-01). LVGL 9.2 has no text outline: a transparent box, placed like label() places a label, holding the text
+ * 8 times in black, moved OUTLINE_PX around, then once in white on top. The white label is returned; set_text and
+ * set_hidden see its tag and act on all of them (its colour may still be set, as the game's result does). */
+#define OUTLINE_PX 2
+static char outlined_tag;
+
+static lv_obj_t *olabel(lv_obj_t *parent, lv_font_t *f, int y, int w)
+{
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_size(box, w + 2 * OUTLINE_PX, LV_SIZE_CONTENT);
+    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, y - OUTLINE_PX);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(box, LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    static const int8_t d[8][2] = { { -1, -1 }, { 0, -1 }, { 1, -1 }, { -1, 0 }, { 1, 0 }, { -1, 1 }, { 0, 1 }, { 1, 1 } };
+    for (int i = 0; i <= 8; i++) {
+        lv_obj_t *l = label(box, f, i < 8 ? lv_color_black() : lv_color_white(), 0, w);
+        int dx = i < 8 ? d[i][0] * OUTLINE_PX : 0, dy = i < 8 ? d[i][1] * OUTLINE_PX : 0;
+        lv_obj_align(l, LV_ALIGN_TOP_MID, dx, OUTLINE_PX + dy);
+        if (i == 8) {
+            lv_obj_set_user_data(l, &outlined_tag);
+            return l;
+        }
+    }
+    return NULL;
+}
+
+static bool outlined(lv_obj_t *l) { return lv_obj_get_user_data(l) == &outlined_tag; }
+
 // A plain shape (circle, ring): no theme style, never clickable, presses go to the parent
 static lv_obj_t *shape(lv_obj_t *parent, int size)
 {
@@ -129,11 +160,15 @@ static lv_obj_t *shape(lv_obj_t *parent, int size)
 // Set only when it changes: a redraw that changes nothing still costs a frame (and invalidates cached pictures)
 static void set_text(lv_obj_t *l, const char *s)
 {
-    if (strcmp(lv_label_get_text(l), s)) lv_label_set_text(l, s);
+    if (!strcmp(lv_label_get_text(l), s)) return;
+    if (!outlined(l)) { lv_label_set_text(l, s); return; }
+    lv_obj_t *box = lv_obj_get_parent(l);        // the outline copies too
+    for (uint32_t i = 0; i < lv_obj_get_child_count(box); i++) lv_label_set_text(lv_obj_get_child(box, i), s);
 }
 
 static void set_hidden(lv_obj_t *o, bool hidden)
 {
+    if (outlined(o)) o = lv_obj_get_parent(o);    // the whole outlined text
     if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != hidden) {
         if (hidden) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -274,6 +309,9 @@ static void pick_create_page(lv_obj_t *pg)
         lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(s, lv_color_hex(sw_rgb[i]), 0);
+        lv_obj_set_style_border_width(s, SW_EDGE, 0);   // a black edge: the swatch stands out over the waves
+        lv_obj_set_style_border_color(s, lv_color_black(), 0);
+        lv_obj_set_style_border_opa(s, LV_OPA_COVER, 0);
         lv_obj_set_style_outline_color(s, lv_color_white(), 0);
         lv_obj_set_style_outline_pad(s, 4, 0);
         lv_obj_set_style_outline_width(s, 0, 0);
@@ -296,9 +334,9 @@ static void pick_create_page(lv_obj_t *pg)
     lv_obj_set_style_pad_row(box, 12, 0);
     lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_center(box);
-    p_title = label(box, f_mid, C_TEXT, 0, 270);
-    p_sub = label(box, f_tiny, C_DIM, 0, 280);      // two lines; "Maintenez : couleur des vagues" is 319 px at 20 px
-    p_back = label(box, f_tiny, C_HINT, 0, 220);
+    p_title = olabel(box, f_mid, 0, 270);
+    p_sub = olabel(box, f_tiny, 0, 280);      // two lines; "Maintenez : couleur des vagues" is 319 px at 20 px
+    p_back = olabel(box, f_tiny, 0, 220);
     pick_refresh();
 }
 
@@ -733,11 +771,11 @@ static void game_create_page(lv_obj_t *pg)
         lv_obj_set_style_bg_opa(g_pdot[i], LV_OPA_COVER, 0);
         lv_obj_add_flag(g_pdot[i], LV_OBJ_FLAG_HIDDEN);
     }
-    g_title = label(pg, f_tiny, C_DIM, 42, 220);   // y 30 touched the ring (snapshot, rc.1)
-    g_word = label(pg, f_mid, C_TEXT, 188, 220);
-    g_out = label(pg, f_mid, C_TEXT, 246, 300);
-    lv_obj_add_flag(g_out, LV_OBJ_FLAG_HIDDEN);
-    g_hint = label(pg, f_small, C_HINT, 372, 260);
+    g_title = olabel(pg, f_tiny, 42, 220);   // y 30 touched the ring (snapshot, rc.1)
+    g_word = olabel(pg, f_mid, 188, 220);
+    g_out = olabel(pg, f_mid, 246, 300);
+    set_hidden(g_out, true);
+    g_hint = olabel(pg, f_small, 372, 260);
     game_refresh();
 }
 
@@ -846,8 +884,8 @@ static void voice_create_page(lv_obj_t *pg)
     lv_obj_set_pos(v_disc, CX - V_DISC / 2, 150 - V_DISC / 2);
     v_secs = label(v_disc, f_mid, C_DARK, 0, V_DISC);
     lv_obj_center(v_secs);
-    v_title = label(pg, f_tiny, C_DIM, 42, 220);
-    v_hint = label(pg, f_small, C_HINT, 248, 300);
+    v_title = olabel(pg, f_tiny, 42, 220);
+    v_hint = olabel(pg, f_small, 248, 300);
 
     v_btn = lv_button_create(pg);             // its own taps: no press bubbles to the page (no recording)
     lv_obj_set_size(v_btn, V_BTN_W, V_BTN_H);
@@ -955,7 +993,8 @@ static struct {                               // the frame being filled (wave_ba
  * (lv_snapshot ARGB8888, 868 KB of PSRAM, its mix disc hidden), taken when the loop starts and again every
  * SNAP_MS (a countdown, a press outline). LVGL's own redraws are off meanwhile (lv_display_enable_invalidation):
  * the page's objects still change, the picture shows them. */
-#define SNAP_MS 200
+#define SNAP_MS 200                           // while the page can change: a game round, a touch in the last second
+#define SNAP_IDLE_MS 1000                     // otherwise (the outlined texts made a picture cost ~20 fps at 200 ms)
 static lv_draw_buf_t snap;                    // the page's picture (data in PSRAM, allocated once)
 static uint8_t *snap_mem;
 static bool snap_ok;                          // the picture is of the page being drawn
@@ -1068,7 +1107,15 @@ static void wave_tick(lv_timer_t *t)
     display_lock(-1);                         // already held in the LVGL task (recursive)
     int64_t t0 = esp_timer_get_time();
     if (!wl.drawing) { wl.drawing = true; wl.t_first = t0; }
-    if (page != PG_MAIN && (snap_page != page || t0 - snap_at > SNAP_MS * 1000LL)) snap_take(page);
+    if (page != PG_MAIN) {
+        bool busy = touch_idle_ms() < 1000;
+        if (page == PG_GAME) {
+            static mesh_game_t g;
+            mesh_game_state(&g);
+            busy |= g.phase != RPS_IDLE;
+        }
+        if (snap_page != page || t0 - snap_at > (busy ? SNAP_MS : SNAP_IDLE_MS) * 1000LL) snap_take(page);
+    }
     wl.t_last = t0;
     wf.n = n;
     wf.now = now;

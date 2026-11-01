@@ -5,6 +5,10 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.12 - 2026-11-01
+- Texts on the colour choice, voice and game pages are white with a black outline: readable over any colour or wave.
+- The colour swatches have a black edge.
+
 ## v0.6.0-rc.10 - 2026-11-01
 - New page order, left to right: colour choice, the mesh, voice and calls, rock paper scissors, system.
 - The colour choice, voice and game pages show the mesh behind them: the mixed colour while someone holds, and the
