@@ -111,5 +111,14 @@ rediscover.
   log is visible. A board plugged alone showed up as COM8 (B) and COM3 (C).
 - Flood numbers: 20 ms non-connectable advertising accepted; 100/100 ms scan hears 61 % of two peers' events;
   `CONFIG_BT_NIMBLE_HOST_QUEUE_CONG_CHECK` must stay off (one report per address per 2.7 s with it on).
-- Pull over Bluetooth: 21.4 KB/s receiving with the display on (1.1 MB in 51 s); `fwloop` self-test 115 KB/s on
-  the flash side. Internal RAM at app ready 135-137 KB free, largest block 64-66 KB.
+- Pull over Bluetooth: 22.5 KB/s while the sender scans 100/100 ms, 40 at 50 ms, 52 at 30 ms (shipped), 75 with no
+  scan; 2M PHY, DLE 251, 7.5 ms, MTU 512 all granted (`fw: link` lines). `fwloop` self-test 115 KB/s on the flash
+  side. Internal RAM at app ready 135-137 KB free, largest block 64-66 KB.
+- Comparing link settings without re-flashing the receiving boards: `fwtune probe=200` on the sender stops each
+  transfer after 200 KB with an ABORT; the dev peers back off 30 s and want again, one `fw: probe … KB/s` line per
+  setting (`fwtune scan=30`, `window=8`, …; `window` and `probe` apply live, the rest at the next transfer).
+- The flash helper opens the port about 3 s into the boot: `ble: synced` (2.5 s) is not in the log window. A
+  command that must reach the board before the first transfer (3.5 s) goes right after the first logged line
+  (`fw: serving`, `diag: firmware`), and the transfer then still obeys a live knob.
+- A board with a label the peers already hold does not serve them again (`not newer`): every build the boards pull
+  consumes its label (rc.2-rc.4 on 2026-10-31). Probe before letting a full pull complete.

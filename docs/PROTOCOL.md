@@ -60,6 +60,7 @@ Pages card parses these lines with the ESP-IDF prefix (`I (1234) `) stripped (`w
 | `peers` | `test: peers n=N` then one `test: peer <addr> v<ver> #rrggbb hold\|idle rssi=-NN age_ms=N` per peer | app |
 | `hold on\|off` | `test: ok hold on\|off`: as a finger down / up on `main` (test only) | app |
 | `fwpull <addr>` | `test: ok fwpull <addr>`: dev-mode pull from that peer by hand (test only) | app |
+| `fwtune [k=v …]` | `test: fwtune window=4 probe=0 scan=30 adv=1 rxscan=0 itvl=6 mince=12 maxce=24 seq=1`: the sender's RAM knobs (test only); `probe=KB` stops a transfer after that many KB | app |
 
 ## 3. Log lines the tools read
 
@@ -75,7 +76,7 @@ Pages card parses these lines with the ESP-IDF prefix (`I (1234) `) stripped (`w
 | `mesh: hold on` / `mesh: hold off` | This board's finger down / up on `main` (also from `hold on\|off`). |
 | `mesh: peer <addr> v<ver> #rrggbb hold\|idle` | A peer's state changed: first heard, new colour, hold on or off, or expired (the harness's `peers_seen`). |
 | `mesh: mix #rrggbb n=<holders>` | What the centre shows and how many hold (self included). |
-| `fw: …` | The dev-mode pull: `fw: target <addr> v<ver>`, `fw: connected`, `fw: 1234/2048 KB`, `fw: verified, restarting`, `fw: confirmed` (after 60 s), `fw: failed <why>`. |
+| `fw: …` | The dev-mode pull: `fw: want <ver> from <addr>`, `fw: linked to <addr>`, `fw: receiving N bytes`, `fw: 1234/2048 KB`, `fw: pulled <ver> from <addr> in S s (R KB/s, N resent), restarting`, `fw: confirmed <ver>` (after 60 s), `fw: failed: <why>`. Sender: `fw: serving <addr> <ver> N bytes`, `fw: link dle/phy/itvl/mtu …` (what the link granted), `fw: sent N/M KB in S s (R KB/s)`, `fw: served <addr> in S s (R KB/s; stream R KB/s, N resent, N ENOMEM N ms, window wait N ms; flood N reports/s)`, `fw: probe <addr>: N KB in S s (…)` after `fwtune probe=`. |
 | `SHOT name w h` … `SHOTEND` | A screen over USB (§2 `shot`). |
 | `slide: drag: first frame after N ms, F frames in T ms (X fps), …` | Each drag drawn as pictures (forge_lvgl). |
 | `diag: mark <stage> internal N KB free (largest N), DMA N KB, PSRAM N KB` | A boot stage. |

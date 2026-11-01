@@ -74,7 +74,7 @@ node web\flash\config.test.js                   # the flasher page's configurati
 ```
 
 The USB test console (`devloop.py send "<cmd>"`): `cfg`, `color RRGGBB`, `name <text>`, `devmode on|off`,
-`bright 0-100`, `peers`, `hold on|off`, `fwpull <addr>`, `shot [screen] [div]`, and espforge's `ping`, `help`,
+`bright 0-100`, `peers`, `hold on|off`, `fwpull <addr>`, `fwinfo`, `fwloop`, `fwtune …`, `shot [screen] [div]`, and espforge's `ping`, `help`,
 `heap`, `where`, `screen`, `tap`, `swipe`, `reboot`. Replies are `test:` log lines
 ([docs/PROTOCOL.md](docs/PROTOCOL.md)).
 

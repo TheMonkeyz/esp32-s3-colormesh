@@ -73,6 +73,7 @@ USB Serial/JTAG, one command per line, answers are `test:` log lines (PROTOCOL.m
 `heap`, `where` (no lock: answers when the display hangs), `memspeed`, `reboot`, `fps [reset]`, `tap X Y`,
 `press X Y [ms]`, `swipe left|right|up|down`, `drag X1 Y1 X2 Y2 [ms]`, `screen [<name>]`, `power`; this app's
 `cfg`, `color RRGGBB`, `name <text>`, `devmode on|off`, `bright 0-100`, `peers`, `hold on|off`, `fwpull <addr>`,
+`fwinfo`, `fwloop`, `fwtune [window=N probe=KB scan=MS adv=0|1 rxscan=0|1 itvl=N mince=N maxce=N seq=0|1]`,
 `shot [screen] [div]`.
 
 - Simulated touches enter at the touch controller read, so wake-up, hold and gestures run the real code (L105). A tap
@@ -222,6 +223,11 @@ units (L55); prefer a test-console switch in the real firmware when the path mat
   → all three magenta; A alone → A's own colour; the dots and "2 near" on each. Log: `mesh: peer …`, `mesh: mix …`.
 - **Dev mode**: `devmode on` on B; flash A with a build labelled above B's; B's log: `fw: target …`, `fw: N/M KB`,
   `fw: verified, restarting`, `diag: firmware <new>`, then `fw: confirmed` after 60 s. Never restart B in those 60 s.
+- **Pull rate** (after a change to mesh_fw.c, mesh.c's radio code or the Bluetooth Kconfig): A on the PC serving a
+  dev peer; A's log `fw: link mtu=512 phy=2M dle=251 itvl=7.50 ms` and `fw: served … (stream ≥ 40 KB/s, 0 resent)`,
+  and `mesh: peer` lines from the third board during the transfer. To compare settings: `fwtune probe=200` right
+  after the first logged line (the transfer stops at 200 KB, the peer retries after 30 s), then one `fwtune …` per
+  setting and read the `fw: probe … KB/s` lines (2026-10-31: scan 100 ms 22 KB/s, 50 ms 40, 30 ms 52, 0 ms 75).
 - **The Pages card**: in Chrome on the published site (or the local preview), connect, read, change the colour, see
   it on the board.
 - **Radio measurements** after a change to `mesh_ble.c` or the Kconfig: the risks table in ARCHITECTURE.md.

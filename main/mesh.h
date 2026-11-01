@@ -36,6 +36,7 @@ void mesh_set_target(uint8_t origin);                   // the peer this board w
 void mesh_set_connectable(bool on);
 void mesh_adv_pause(bool pause);                        // stop advertising (true) / resume (false); synchronous
 void mesh_scan_pause(bool pause);                       // cancel the scan (true, before ble_gap_connect) / resume
+void mesh_set_scan_window(uint16_t window);             // scan window in 0.625 ms units within the 100 ms interval (0 = default, continuous); restarts the scan
 void mesh_refresh(void);                                // re-read the OTA state (servable/pending), bump seq, re-advertise
 uint8_t mesh_own_origin(void);                          // the origin id (addr[0]), 0 before sync
 uint8_t mesh_own_addr_type(void);                       // for ble_gap_connect(); valid after sync

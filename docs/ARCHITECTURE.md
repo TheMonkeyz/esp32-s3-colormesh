@@ -121,8 +121,14 @@ Measured on board A alone, 2026-10-31 (v0.1.0-rc.0 test builds):
 - Hold to mix on the own board: `mesh: hold on` to `mesh: mix` 1-2 ms; release 20 ms.
 - Risk 5: the dev-mode pull A <- B (forced `fwpull`, A receiving, display on): 1,124,336 bytes in 51.0 s, 21.4 KB/s,
   0 resent, MTU 512; then `fw: pending verify` and `fw: confirmed` 60 s after the restart, `fwinfo state=valid`.
-  Below the 40 KB/s goal: the sender's `fw: link` line (PHY, DLE, interval) was not visible (B on a charger); next
-  step is to read it on the PC and check that 2M PHY and DLE 251 were granted.
+  Read from the sender (A serving B and C, rc.3-rc.5 test builds): the link had everything the design asks,
+  `fw: link dle tx=251 rx=251`, `phy tx=2M rx=2M (update status 0)`, `itvl=7.50 ms latency=0`, `mtu=512`, and still
+  22.5 KB/s with 48 of 49 s spent in the mbuf back-off (`48161 ENOMEM`, window wait 0.35 s): the host was never the
+  limit, the controller sent one 251-byte packet per 7.5 ms event (509 B per 22.5 ms) while the flood's 100/100 ms
+  scan was open. 200 KB probes (`fwtune probe=200`) against the sender's scan window during the transfer:
+  100 ms = 22 KB/s, 70 = 32, 50 = 40, 30 = 52, 0 = 75 KB/s; advertising off, window 8, `max_ce_len` 48 and rc.1's
+  all-at-once link set-up changed nothing (0 resent everywhere). Fix: the sender scans 30 ms of every 100 ms while
+  it serves (`XFER_SCAN_MS`), the receiver pauses its scan while it pulls. Full pulls of the rc.5 image (1,136,224 bytes) read on the sender: to B in 20.9 s (52.9 KB/s, stream 53.4, 0 resent, window wait 156 ms), to C in 22.1 s (50.1 KB/s, 0 resent), with `mesh: peer` lines from the third board arriving during both transfers; C's first attempt lost the link at 676 KB (the peer dropped out, cause not visible from A) and succeeded 30 s later.
 
 
 ## Display pipeline

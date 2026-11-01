@@ -1234,3 +1234,14 @@ rc.6: "no log line presence: touch on a dark screen").
 Fix: the state machine remembers a wake made by the poll from OFF for `PRESENCE_DARK_TOUCH_S` (0.6 s);
 `presence_sm_take_dark_touch()` answers the filter from the state or that grace, and clears it.
 Check: `tests/host/test_presence.c` (the grace, taken once, expired); on the board `presence.dim_off_wake` ten times.
+
+**L214. A continuous scan starves a connection on the ESP32-S3 controller: one packet per connection event.**
+Why: ColorMesh's firmware pull ran at 22 KB/s with 2M PHY, data length 251, a 7.5 ms interval and MTU 512 all granted
+(the `fw: link` lines said so), the host waiting for mbufs 48 s of 49. While the flood's 100/100 ms passive scan was
+open, the closed controller closed every connection event after one 251-byte packet (509 B per 3 events = 22.6 KB/s,
+exactly the measurement). `max_ce_len`, the send window, the advertising and the order of the link procedures
+changed nothing; the scan window alone set the rate: 100 ms 22 KB/s, 50 ms 40, 30 ms 52, none 75.
+Fix: scan less while a connection must carry data (ColorMesh: 30 ms of every 100 ms on the sender, no scan on the
+receiver, `mesh_set_scan_window()`), and give the sender a probe mode (stop after N KB, the peer retries) so link
+settings can be compared in minutes without re-flashing the receiving boards.
+Check: the sender's `fw: served … stream ≥ 40 KB/s` line with `mesh: peer` lines still arriving during the transfer.

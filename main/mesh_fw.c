@@ -14,6 +14,16 @@
 //   0004 ACK (notify, 20 bytes): sector u16 LE · status (0 ok, 1 CRC error: resend from it, 2 abort) · zeros.
 //        Sector 0xFFFF = the end: status 0 image verified and boot slot set, 2 failed.
 // The sender keeps a window of 4 sectors beyond the last ACKed one; the receiver has a PSRAM ring of 8 sectors.
+// Link set-up runs one Link Layer procedure at a time (data length, then 2M PHY, then the interval, then the MTU)
+// and logs what each one granted: "fw: link ..." lines on both boards.
+// The rate is set by the SENDER'S SCAN DUTY, not by the link: with the flood's continuous 100/100 ms scan open, the
+// controller gives the connection one 251-byte packet per 7.5 ms event (22 KB/s, measured 2026-10-31 with 2M PHY,
+// DLE 251 and MTU 512 all granted); scan 50 ms of 100 gave 40 KB/s, 30 ms 52 KB/s, no scan 75 KB/s. Advertising,
+// the window, the event length and the order of the link procedures changed nothing. So the sender scans
+// XFER_SCAN_MS of every 100 ms during a transfer (the flood still arrives, slower) and the receiver pauses its scan.
+// `fwtune` (test console) changes the sender's window, scan duty and connection parameters in RAM and can stop a
+// transfer after N KB ("probe": the dev peer retries after its 30 s back-off), so link settings can be compared
+// without re-flashing the receiving board.
 //
 // Threads: the GAP hook and the GATT callbacks run in the NimBLE host task and only copy and post; every NimBLE
 // procedure, flash write, mesh_* call and log line is in the "fw" task (core 0, 5 KB internal stack: fwloop, which
@@ -50,6 +60,7 @@ static const char *TAG = "fw";
 #define SECTOR          4096
 #define RING            8           // receiver: sectors buffered in PSRAM
 #define WINDOW          4           // sender: sectors sent beyond the last ACKed one
+#define XFER_SCAN_MS    30          // sender's scan window (of 100 ms) during a transfer: 52 KB/s measured, 40 at 50 ms
 #define PKT_MAX         509         // ATT MTU 512 - 3
 #define SEQ_LAST        0xFF
 #define ACK_LEN         20
@@ -82,7 +93,9 @@ static const ble_uuid128_t ack_uuid = CM_UUID(0x04);
 static uint16_t ack_handle;
 
 // ---- events to the fw task: type << 24 | argument ----
-enum { E_TARGET = 1, E_PCONN, E_PDISC, E_START, E_SECTOR, E_NACK, E_RXERR, E_INFO, E_LOOP, E_CONFIRM };
+enum { E_TARGET = 1, E_PCONN, E_PDISC, E_START, E_SECTOR, E_NACK, E_RXERR, E_INFO, E_LOOP, E_CONFIRM, E_LINK, E_TUNE };
+// E_LINK argument: kind << 20 | 20 bits of payload (receiver side: what the link granted, logged by the fw task)
+enum { LK_PHY = 1, LK_DLE, LK_UPD, LK_MTU };
 #define EV(t, a) (((uint32_t)(t) << 24) | ((uint32_t)(a) & 0xFFFFFF))
 enum { RXE_ABORT = 1, RXE_NOT_NEWER, RXE_BUSY };
 static const char *const rxe_text[] = { "", "the sender aborted", "offered version is not newer",
@@ -97,7 +110,8 @@ static const char *const rxe_text[] = { "", "the sender aborted", "offered versi
 #define B_DLE       BIT5
 #define B_GATT      BIT6
 #define B_ACK       BIT7
-#define B_ALL       0xFF
+#define B_UPD       BIT8
+#define B_ALL       0x1FF
 
 static QueueHandle_t evq;           // GAP hook, CTRL, console, timer -> fw task
 static QueueHandle_t secq;          // DATA (sector full / CRC error / protocol error) -> fw task
@@ -158,14 +172,30 @@ static bool noted_missing, noted_devmode;
 static struct {
     volatile uint16_t conn;
     volatile int conn_status, disc_reason, gatt_status;
-    volatile uint16_t mtu, dle;
-    volatile uint8_t phy;
+    volatile uint16_t mtu, dle, dle_rx, dle_time;
+    volatile uint8_t phy, phy_rx;
+    volatile int phy_status, upd_status;
     uint16_t svc_start, svc_end, h_ctrl, h_data, h_ack;
     volatile int32_t acked, nack;
     volatile bool abort_rx, loop;
     volatile int done;
-    uint32_t enomem, resent;
+    uint32_t enomem, resent, enomem_ms, wait_ms;       // back-offs, and time spent waiting for the window to open
+    int64_t t_stream_us;
+    bool probed;                                      // the stream stopped at tune.probe_kb
 } tx = { .conn = BLE_HS_CONN_HANDLE_NONE };
+
+// fwtune knobs (RAM; the defaults are the release's behaviour). Read by the fw task at the start of a transfer.
+static struct {
+    volatile uint8_t window;        // sectors sent beyond the last ACKed one, 1..RING
+    volatile uint16_t probe_kb;     // sender: stop after this many KB and abort (0 = the whole image)
+    volatile uint8_t scan;          // sender's scan window during a transfer, ms of each 100 ms (0 = scan paused, 100 = the flood's)
+    volatile uint8_t adv;           // sender keeps advertising during a transfer (1) or pauses it (0)
+    volatile uint8_t rxscan;        // receiver keeps scanning during a pull (1) or pauses its scan (0)
+    volatile uint16_t itvl, min_ce, max_ce;   // connection interval and event length, 1.25 / 0.625 ms units
+    volatile uint8_t seq;           // link set-up one procedure at a time (1) or all at once as rc.1 did (0)
+} tune = { .window = WINDOW, .probe_kb = 0, .scan = XFER_SCAN_MS, .adv = 1, .rxscan = 0, .itvl = 6, .min_ce = 12, .max_ce = 24,
+           .seq = 1 };
+static const char *const PROBE_DONE = "probe done";
 static uint8_t txbuf[PKT_MAX];
 static uint8_t cool_addr[6];
 static uint32_t cool_until, next_serve_ms;
@@ -348,6 +378,33 @@ static void gap_hook(struct ble_gap_event *e)
     } else if (e->type == BLE_GAP_EVENT_DISCONNECT) {
         if (e->disconnect.conn.conn_handle == rx.conn) rx.active = false;
         post(evq, EV(E_PDISC, e->disconnect.conn.conn_handle));
+    } else if (e->type == BLE_GAP_EVENT_PHY_UPDATE_COMPLETE && e->phy_updated.conn_handle == rx.conn) {
+        post(evq, EV(E_LINK, LK_PHY << 20 | (e->phy_updated.status & 0xFF) << 8 | (e->phy_updated.tx_phy & 0xF) << 4
+                            | (e->phy_updated.rx_phy & 0xF)));
+    } else if (e->type == BLE_GAP_EVENT_DATA_LEN_CHG && e->data_len_chg.conn_handle == rx.conn) {
+        post(evq, EV(E_LINK, LK_DLE << 20 | (e->data_len_chg.max_tx_octets & 0x3FF) << 10
+                            | (e->data_len_chg.max_rx_octets & 0x3FF)));
+    } else if (e->type == BLE_GAP_EVENT_CONN_UPDATE && e->conn_update.conn_handle == rx.conn) {
+        post(evq, EV(E_LINK, LK_UPD << 20 | (e->conn_update.status & 0xFFFF)));
+    } else if (e->type == BLE_GAP_EVENT_MTU && e->mtu.conn_handle == rx.conn) {
+        post(evq, EV(E_LINK, LK_MTU << 20 | (e->mtu.value & 0xFFFF)));
+    }
+}
+
+static const char *phy_name(unsigned p) { return p == 2 ? "2M" : p == 1 ? "1M" : p == 3 ? "coded" : "?"; }
+
+// Receiver side: one line per thing the link granted (fw task)
+static void rx_on_link(uint32_t a)
+{
+    uint32_t v = a & 0xFFFFF;
+    struct ble_gap_conn_desc d;
+    int itvl = rx.conn != BLE_HS_CONN_HANDLE_NONE && ble_gap_conn_find(rx.conn, &d) == 0 ? d.conn_itvl : 0;
+    switch (a >> 20) {
+    case LK_PHY: ESP_LOGI(TAG, "link phy tx=%s rx=%s (status %lu)", phy_name(v >> 4 & 0xF), phy_name(v & 0xF),
+                          (unsigned long)(v >> 8 & 0xFF)); break;
+    case LK_DLE: ESP_LOGI(TAG, "link dle tx=%lu rx=%lu", (unsigned long)(v >> 10 & 0x3FF), (unsigned long)(v & 0x3FF)); break;
+    case LK_UPD: ESP_LOGI(TAG, "link itvl=%d.%02d ms (update status %lu)", itvl * 125 / 100, itvl * 125 % 100, (unsigned long)v); break;
+    case LK_MTU: ESP_LOGI(TAG, "link mtu=%lu", (unsigned long)v); break;
     }
 }
 
@@ -384,6 +441,7 @@ static void rx_stop(bool backoff)
         mesh_set_target(MP_TARGET_NONE);
         mesh_set_connectable(false);
         mesh_adv_pause(false);
+        if (linked) mesh_scan_pause(false);
     }
     if (rx.loop) send_ack(ACK_DONE, ST_ABORT);        // fwloop: the sender side stops at once
     rx.conn = BLE_HS_CONN_HANDLE_NONE;
@@ -563,6 +621,7 @@ static void rx_on_connect(uint16_t conn)
     }
     mesh_adv_pause(true);                             // first: the mesh task would restart the connectable advert
     mesh_set_connectable(false);
+    if (!tune.rxscan) mesh_scan_pause(true);          // the radio is the link's until the pull ends
     memcpy(rx.peer_addr, pconn_addr, 6);
     rx.conn = conn;
     rx.active = false;
@@ -604,12 +663,19 @@ static int tx_gap_cb(struct ble_gap_event *e, void *arg)      // host task
         xEventGroupSetBits(eg, B_MTU);
         break;
     case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
-        if (e->phy_updated.status == 0) tx.phy = e->phy_updated.tx_phy;
+        tx.phy_status = e->phy_updated.status;
+        if (e->phy_updated.status == 0) { tx.phy = e->phy_updated.tx_phy; tx.phy_rx = e->phy_updated.rx_phy; }
         xEventGroupSetBits(eg, B_PHY);
         break;
     case BLE_GAP_EVENT_DATA_LEN_CHG:
         tx.dle = e->data_len_chg.max_tx_octets;
+        tx.dle_rx = e->data_len_chg.max_rx_octets;
+        tx.dle_time = e->data_len_chg.max_tx_time;
         xEventGroupSetBits(eg, B_DLE);
+        break;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        tx.upd_status = e->conn_update.status;
+        xEventGroupSetBits(eg, B_UPD);
         break;
     case BLE_GAP_EVENT_NOTIFY_RX:
         if (e->notify_rx.attr_handle == tx.h_ack && OS_MBUF_PKTLEN(e->notify_rx.om) >= 3) {
@@ -697,6 +763,7 @@ static int emit_ble(const uint8_t *p, int len)
         tx.enomem++;                                  // mbuf pool empty: back off one tick, never a loss
         if (now_ms() - t0 > 10000) return rc;
         vTaskDelay(1);
+        tx.enomem_ms++;
     }
 }
 
@@ -725,8 +792,13 @@ static const char *tx_stream(const uint8_t *img, uint32_t len, int dmax, emit_fn
     tx.nack = -1;
     tx.abort_rx = false;
     tx.done = -1;
-    tx.enomem = tx.resent = 0;
+    tx.enomem = tx.resent = tx.enomem_ms = tx.wait_ms = 0;
+    tx.probed = false;
+    tx.t_stream_us = esp_timer_get_time();
     for (;;) {
+        // fwtune's window and probe are read live: a probe sent during a transfer stops it
+        uint32_t window = tx.loop ? WINDOW : tune.window < 1 ? 1 : tune.window > RING ? RING : tune.window;
+        uint32_t probe = tx.loop ? 0 : (uint32_t)tune.probe_kb * 1024;
         xEventGroupClearBits(eg, B_ACK);
         if (!tx.loop && (xEventGroupGetBits(eg) & B_DISC)) return "link lost";
         if (tx.abort_rx) return "the receiver aborted";
@@ -739,11 +811,15 @@ static const char *tx_stream(const uint8_t *img, uint32_t len, int dmax, emit_fn
             uint32_t done = a + 1 >= (int32_t)nsec ? len : (uint32_t)(a + 1) * SECTOR;
             if (!tx.loop && (done / LOG_STEP != logged || done == len)) {
                 logged = done / LOG_STEP;
-                ESP_LOGI(TAG, "sent %lu/%lu KB", (unsigned long)(done / 1024), (unsigned long)(len / 1024));
+                char s[12], r[12];
+                fmt_rate(s, sizeof(s), r, sizeof(r), done, esp_timer_get_time() - tx.t_stream_us);
+                ESP_LOGI(TAG, "sent %lu/%lu KB in %s s (%s KB/s)", (unsigned long)(done / 1024),
+                         (unsigned long)(len / 1024), s, r);
             }
+            if (probe && done >= probe) { tx.probed = true; return NULL; }
         }
         if (a >= (int32_t)nsec - 1) return NULL;
-        if (next < nsec && (int32_t)next <= a + WINDOW) {
+        if (next < nsec && (int32_t)next <= a + (int32_t)window) {
             int rc = tx_sector(img, len, next, dmax, emit);
             if (rc) return rc == BLE_HS_ENOTCONN ? "link lost" : "write failed";
             next++;
@@ -752,7 +828,9 @@ static const char *tx_stream(const uint8_t *img, uint32_t len, int dmax, emit_fn
         }
         if (now_ms() - last_ms > LINK_IDLE_MS) return "no ACK for 15 s";
         if (tx.loop) { loop_drain(); if (tx.acked == last_acked && !tx.abort_rx && tx.nack < 0) return "fwloop stalled"; continue; }
+        uint32_t w0 = now_ms();
         xEventGroupWaitBits(eg, B_ACK | B_DISC, pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
+        tx.wait_ms += now_ms() - w0;
     }
 }
 
@@ -765,28 +843,57 @@ static EventBits_t wait_bits(EventBits_t want, bool all, int ms)
 static const char *tx_session(const uint8_t *img)
 {
     uint16_t c = tx.conn;
-    int rc = ble_hs_hci_util_set_data_len(c, 251, 2120);
-    if (rc) ESP_LOGW(TAG, "set_data_len rc=%d", rc);
-    ble_att_set_preferred_mtu(512);
-    rc = ble_gattc_exchange_mtu(c, mtu_cb, NULL);
-    if (rc) ESP_LOGW(TAG, "exchange_mtu rc=%d", rc);
     struct ble_gap_conn_desc d;
-    if (ble_gap_conn_find(c, &d) == 0 && d.conn_itvl != 6) {
-        struct ble_gap_upd_params up = { .itvl_min = 6, .itvl_max = 6, .latency = 0, .supervision_timeout = 600,
-                                         .min_ce_len = 12, .max_ce_len = 24 };
-        rc = ble_gap_update_params(c, &up);
-        if (rc) ESP_LOGW(TAG, "update_params rc=%d", rc);
+    EventBits_t b;
+    char miss[64] = "";
+    int rc;
+    if (!tune.seq) {                                  // rc.1's order: everything at once, then one wait
+        rc = ble_hs_hci_util_set_data_len(c, 251, 2120);
+        if (rc) ESP_LOGW(TAG, "set_data_len rc=%d", rc);
+        ble_att_set_preferred_mtu(512);
+        rc = ble_gattc_exchange_mtu(c, mtu_cb, NULL);
+        if (rc) ESP_LOGW(TAG, "exchange_mtu rc=%d", rc);
+        rc = ble_gap_set_prefered_le_phy(c, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
+        if (rc) ESP_LOGW(TAG, "set_prefered_le_phy rc=%d", rc);
+        b = wait_bits(B_MTU | B_PHY | B_DLE, true, 2000);
+        if (b & B_DISC) return "link lost";
+        if (!(b & B_DLE)) strlcat(miss, " no-dle-event", sizeof(miss));
+        if (!(b & B_PHY)) strlcat(miss, " no-phy-event", sizeof(miss));
+        if (!(b & B_MTU)) strlcat(miss, " no-mtu-event", sizeof(miss));
     }
-    rc = ble_gap_set_prefered_le_phy(c, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
-    if (rc) ESP_LOGW(TAG, "set_prefered_le_phy rc=%d", rc);
-    EventBits_t b = wait_bits(B_MTU | B_PHY | B_DLE, true, 2000);
-    if (b & B_DISC) return "link lost";
+    // One Link Layer procedure at a time (two at once collide and one of them is refused): data length first
+    if (!tune.seq) rc = 0;
+    else if ((rc = ble_hs_hci_util_set_data_len(c, 251, 2120)) != 0) ESP_LOGW(TAG, "set_data_len rc=%d", rc);
+    else if (!((b = wait_bits(B_DLE, false, 1500)) & B_DLE)) { if (b & B_DISC) return "link lost"; strlcat(miss, " no-dle-event", sizeof(miss)); }
+    ESP_LOGI(TAG, "link dle tx=%u rx=%u tx_time=%u us", tx.dle, tx.dle_rx, tx.dle_time);
+    if (!tune.seq) rc = 0;
+    else if ((rc = ble_gap_set_prefered_le_phy(c, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0)) != 0) ESP_LOGW(TAG, "set_prefered_le_phy rc=%d", rc);
+    else if (!((b = wait_bits(B_PHY, false, 1500)) & B_PHY)) { if (b & B_DISC) return "link lost"; strlcat(miss, " no-phy-event", sizeof(miss)); }
     uint8_t txp = 0, rxp = 0;
     ble_gap_read_le_phy(c, &txp, &rxp);
+    ESP_LOGI(TAG, "link phy tx=%s rx=%s (update status %d, event tx=%s rx=%s)", phy_name(txp), phy_name(rxp),
+             tx.phy_status, phy_name(tx.phy), phy_name(tx.phy_rx));
+    if (ble_gap_conn_find(c, &d) == 0 && (d.conn_itvl != tune.itvl || d.conn_latency != 0)) {
+        struct ble_gap_upd_params up = { .itvl_min = tune.itvl, .itvl_max = tune.itvl, .latency = 0,
+                                         .supervision_timeout = 600, .min_ce_len = tune.min_ce, .max_ce_len = tune.max_ce };
+        rc = ble_gap_update_params(c, &up);
+        if (rc) ESP_LOGW(TAG, "update_params rc=%d", rc);
+        else if (!((b = wait_bits(B_UPD, false, 2000)) & B_UPD)) { if (b & B_DISC) return "link lost"; strlcat(miss, " no-update-event", sizeof(miss)); }
+    }
+    bool have_d = ble_gap_conn_find(c, &d) == 0;
+    int itvl = have_d ? d.conn_itvl : 0;
+    ESP_LOGI(TAG, "link itvl=%d.%02d ms latency=%u timeout=%u ms (update status %d, ce %u-%u)", itvl * 125 / 100,
+             itvl * 125 % 100, have_d ? d.conn_latency : 0, have_d ? d.supervision_timeout * 10 : 0, tx.upd_status,
+             tune.min_ce, tune.max_ce);
+    if (tune.seq) {
+        ble_att_set_preferred_mtu(512);
+        rc = ble_gattc_exchange_mtu(c, mtu_cb, NULL);
+        if (rc) ESP_LOGW(TAG, "exchange_mtu rc=%d", rc);
+        else if (!((b = wait_bits(B_MTU, false, 2000)) & B_MTU)) { if (b & B_DISC) return "link lost"; strlcat(miss, " no-mtu-event", sizeof(miss)); }
+    }
     uint16_t mtu = ble_att_mtu(c);
-    int itvl = ble_gap_conn_find(c, &d) == 0 ? d.conn_itvl : 0;
-    ESP_LOGI(TAG, "link mtu=%u phy=%s dle=%u itvl=%d.%02d ms%s", mtu, txp == 2 ? "2M" : txp == 1 ? "1M" : "?",
-             tx.dle, itvl * 125 / 100, itvl * 125 % 100, (b & (B_MTU | B_PHY | B_DLE)) == (B_MTU | B_PHY | B_DLE) ? "" : " (timeout)");
+    ESP_LOGI(TAG, "link mtu=%u phy=%s dle=%u itvl=%d.%02d ms window=%u scan=%u ms adv=%u seq=%u%s", mtu, phy_name(txp), tx.dle,
+             itvl * 125 / 100, itvl * 125 % 100, tune.window, tune.scan, tune.adv, tune.seq, miss);
     if (mtu < 64) return "MTU too small";
 
     tx.svc_start = tx.svc_end = tx.h_ctrl = tx.h_data = tx.h_ack = 0;
@@ -813,6 +920,12 @@ static const char *tx_session(const uint8_t *img)
     int payload = mtu - 3 < PKT_MAX ? mtu - 3 : PKT_MAX;
     const char *why = tx_stream(img, run_len, payload - 3, emit_ble);
     if (why) return why;
+    if (tx.probed) {                                  // fwtune probe: tell the receiver, which backs off 30 s
+        uint8_t ab = CTRL_ABORT;
+        xEventGroupClearBits(eg, B_GATT);
+        if (ble_gattc_write_flat(c, tx.h_ctrl, &ab, 1, write_cb, NULL) == 0) wait_bits(B_GATT, false, 1000);
+        return PROBE_DONE;
+    }
     uint32_t t0 = now_ms();
     while (tx.done < 0 && now_ms() - t0 < 15000) {    // the receiver verifies (esp_ota_end) and answers
         xEventGroupClearBits(eg, B_ACK);
@@ -841,8 +954,8 @@ static void serve(const mesh_peer_t *p)
     tx.phy = 0;
     ble_addr_t peer = { .type = BLE_ADDR_PUBLIC };   // every board advertises its public address
     memcpy(peer.val, p->addr, 6);
-    struct ble_gap_conn_params cp = { .scan_itvl = 0x30, .scan_window = 0x30, .itvl_min = 6, .itvl_max = 6,
-                                      .latency = 0, .supervision_timeout = 600, .min_ce_len = 12, .max_ce_len = 24 };
+    struct ble_gap_conn_params cp = { .scan_itvl = 0x30, .scan_window = 0x30, .itvl_min = tune.itvl, .itvl_max = tune.itvl,
+                                      .latency = 0, .supervision_timeout = 600, .min_ce_len = tune.min_ce, .max_ce_len = tune.max_ce };
 #ifdef MESH_PEER_HAS_TARGET
     int connect_ms = CONNECT_MS;
 #else
@@ -857,24 +970,38 @@ static void serve(const mesh_peer_t *p)
         return;
     }
     EventBits_t b = xEventGroupWaitBits(eg, B_CONN | B_CONN_FAIL, pdFALSE, pdFALSE, pdMS_TO_TICKS(connect_ms + 2000));
-    mesh_scan_pause(false);
     if (!(b & B_CONN)) {
+        mesh_scan_pause(false);
         if (!(b & B_CONN_FAIL)) ble_gap_conn_cancel();
         ESP_LOGW(TAG, "failed: no connection to %s (status %d)", a, b & B_CONN_FAIL ? tx.conn_status : -1);
         esp_partition_munmap(mh);
         return;
     }
     ESP_LOGI(TAG, "serving %s %s %lu bytes", a, esp_app_get_description()->version, (unsigned long)run_len);
+    // The flood goes on during the transfer: the scan with the tuned window (fwtune scan=, 100 = as always, 0 = off)
+    mesh_set_scan_window((uint16_t)tune.scan * 8 / 5);
+    if (tune.scan) mesh_scan_pause(false);
+    if (!tune.adv) mesh_adv_pause(true);
     int64_t t0 = esp_timer_get_time();
     const char *why = tx_session(img);
     int64_t us = esp_timer_get_time() - t0;
+    mesh_stats_t st;
+    mesh_get_stats(&st);
+    char s[12], r[12], ss[12], rs[12];
+    uint32_t nsec = (run_len + SECTOR - 1) / SECTOR;
+    uint32_t sent = !why ? run_len : tx.acked < 0 ? 0 : tx.acked + 1 >= (int32_t)nsec ? run_len : (uint32_t)(tx.acked + 1) * SECTOR;
+    fmt_rate(s, sizeof(s), r, sizeof(r), run_len, us);
+    fmt_rate(ss, sizeof(ss), rs, sizeof(rs), sent, esp_timer_get_time() - tx.t_stream_us);
     if (!why) {
-        char s[12], r[12];
-        fmt_rate(s, sizeof(s), r, sizeof(r), run_len, us);
-        ESP_LOGI(TAG, "served %s in %s s (%s KB/s, %lu resent, %lu ENOMEM)", a, s, r, (unsigned long)tx.resent,
-                 (unsigned long)tx.enomem);
+        ESP_LOGI(TAG, "served %s in %s s (%s KB/s; stream %s KB/s, %lu resent, %lu ENOMEM %lu ms, window wait %lu ms; "
+                 "flood %lu reports/s)", a, s, r, rs, (unsigned long)tx.resent, (unsigned long)tx.enomem,
+                 (unsigned long)tx.enomem_ms, (unsigned long)tx.wait_ms, (unsigned long)st.colormesh_s);
+    } else if (why == PROBE_DONE) {
+        ESP_LOGI(TAG, "probe %s: %lu KB in %s s (%s KB/s, %lu resent, %lu ENOMEM %lu ms, window wait %lu ms; "
+                 "flood %lu reports/s)", a, (unsigned long)(sent / 1024), ss, rs, (unsigned long)tx.resent,
+                 (unsigned long)tx.enomem, (unsigned long)tx.enomem_ms, (unsigned long)tx.wait_ms, (unsigned long)st.colormesh_s);
     } else {
-        ESP_LOGW(TAG, "failed: %s (serving %s)", why, a);
+        ESP_LOGW(TAG, "failed: %s (serving %s, %lu KB sent)", why, a, (unsigned long)(sent / 1024));
     }
     if (!(xEventGroupGetBits(eg) & B_DISC)) {
         ble_gap_terminate(tx.conn, BLE_ERR_REM_USER_CONN_TERM);
@@ -882,6 +1009,9 @@ static void serve(const mesh_peer_t *p)
     }
     tx.conn = BLE_HS_CONN_HANDLE_NONE;
     esp_partition_munmap(mh);
+    mesh_set_scan_window(0);                          // the flood's continuous scan and advertising again
+    mesh_scan_pause(false);
+    if (!tune.adv) mesh_adv_pause(false);
 }
 
 #ifndef MESH_PEER_HAS_TARGET
@@ -1069,6 +1199,11 @@ static void on_event(uint32_t e)
     case E_RXERR: if (rx.state != R_IDLE) rx_fail("%s", rxe_text[a < 4 ? a : 0]); break;
     case E_INFO: do_info(); break;
     case E_LOOP: do_loop(); break;
+    case E_LINK: rx_on_link(a); break;
+    case E_TUNE:
+        ESP_LOGI("test", "fwtune window=%u probe=%u scan=%u adv=%u rxscan=%u itvl=%u mince=%u maxce=%u seq=%u", tune.window,
+                 tune.probe_kb, tune.scan, tune.adv, tune.rxscan, tune.itvl, tune.min_ce, tune.max_ce, tune.seq);
+        break;
     case E_CONFIRM: do_confirm(); break;
     }
 }
@@ -1099,6 +1234,29 @@ static void fw_task(void *arg)
 
 static void cmd_fwinfo(int argc, char **argv) { post(evq, EV(E_INFO, 0)); }
 static void cmd_fwloop(int argc, char **argv) { post(evq, EV(E_LOOP, 0)); }
+
+// fwtune [key=value ...]: window=1..8 probe=KB scan=0..100 adv=0|1 rxscan=0|1 itvl=6..3200 mince=N maxce=N (RAM only)
+static void cmd_fwtune(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        char *eq = strchr(argv[i], '=');
+        if (!eq) { ESP_LOGW("test", "error fwtune: expected key=value, got %s", argv[i]); return; }
+        *eq = 0;
+        long v = strtol(eq + 1, NULL, 10);
+        const char *k = argv[i];
+        if (!strcmp(k, "window") && v >= 1 && v <= RING) tune.window = (uint8_t)v;
+        else if (!strcmp(k, "probe") && v >= 0 && v <= 65535) tune.probe_kb = (uint16_t)v;
+        else if (!strcmp(k, "scan") && v >= 0 && v <= 100) tune.scan = (uint8_t)v;
+        else if (!strcmp(k, "adv") && (v == 0 || v == 1)) tune.adv = (uint8_t)v;
+        else if (!strcmp(k, "rxscan") && (v == 0 || v == 1)) tune.rxscan = (uint8_t)v;
+        else if (!strcmp(k, "itvl") && v >= 6 && v <= 3200) tune.itvl = (uint16_t)v;
+        else if (!strcmp(k, "mince") && v >= 0 && v <= 0xFFFF) tune.min_ce = (uint16_t)v;
+        else if (!strcmp(k, "maxce") && v >= 0 && v <= 0xFFFF) tune.max_ce = (uint16_t)v;
+        else if (!strcmp(k, "seq") && (v == 0 || v == 1)) tune.seq = (uint8_t)v;
+        else { ESP_LOGW("test", "error fwtune: bad %s=%s", k, eq + 1); return; }
+    }
+    post(evq, EV(E_TUNE, 0));
+}
 static void confirm_cb(void *arg) { post(evq, EV(E_CONFIRM, 0)); }
 
 // ======================================================================================================
@@ -1149,6 +1307,7 @@ void mesh_fw_init(void)
     mesh_set_gap_hook(gap_hook);
     testcon_register("fwinfo", "fwinfo", cmd_fwinfo);
     testcon_register("fwloop", "fwloop (own image into the other slot, boot unchanged)", cmd_fwloop);
+    testcon_register("fwtune", "fwtune [window=N probe=KB scan=MS adv=0|1 rxscan=0|1 itvl=N mince=N maxce=N seq=0|1]", cmd_fwtune);
     if (xTaskCreatePinnedToCore(fw_task, "fw", 5120, NULL, 4, &fw_task_h, 0) != pdPASS) {
         ESP_LOGE(TAG, "no task");
         return;

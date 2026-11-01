@@ -5,6 +5,15 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.1.0-rc.5 - 2026-10-31
+- Dev-mode updates from another board are 2.3 times faster: the sending board scans for the others 30 ms of every
+  100 ms while it sends (it still hears them, more slowly) and the receiving board stops scanning while it pulls.
+  Measured: Full pulls of the rc.5 image (1,136,224 bytes) read on the sender: to B in 20.9 s (52.9 KB/s, stream 53.4, 0 resent, window wait 156 ms), to C in 22.1 s (50.1 KB/s, 0 resent), with `mesh: peer` lines from the third board arriving during both transfers; C's first attempt lost the link at 676 KB (the peer dropped out, cause not visible from A) and succeeded 30 s later. The radio link itself was already at 2M PHY with 251-byte packets.
+- Tear-free screen refresh on fast colour changes (frames synced to the panel's TE signal).
+- For developers: the sender logs what the link granted (`fw: link dle/phy/itvl/mtu`), and `fwtune` on the test
+  console changes the send window, scan duty and connection settings in RAM or stops a transfer after N KB to
+  compare settings. rc.2 to rc.4 were test labels on the boards, not releases.
+
 ## v0.1.0-rc.1 - 2026-10-31
 - Pick your colour at start-up on a ring of 12; it is remembered.
 - Touch and hold the screen: every ColorMesh board nearby, yours included, lights up in your colour over Bluetooth, within a blink. Several people holding at once mix their colours (red and blue make magenta, all three make white).

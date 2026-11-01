@@ -567,6 +567,17 @@ void mesh_scan_pause(bool pause)
     xSemaphoreGive(radio_lock);
 }
 
+void mesh_set_scan_window(uint16_t window)
+{
+    uint16_t w = window == 0 ? SCAN_WINDOW : window > SCAN_ITVL ? SCAN_ITVL : window;
+    if (w == scan_window) return;
+    if (!synced) { scan_window = w; return; }
+    xSemaphoreTake(radio_lock, portMAX_DELAY);
+    scan_window = w;
+    if (scan_on) { scan_stop_locked(); if (!scan_paused) scan_start_locked(); }
+    xSemaphoreGive(radio_lock);
+}
+
 void mesh_get_mix(uint8_t *r, uint8_t *g, uint8_t *b)
 {
     uint32_t p = mix_packed;

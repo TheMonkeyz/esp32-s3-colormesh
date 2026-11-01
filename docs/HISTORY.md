@@ -83,3 +83,15 @@ and mixed (blue + chartreuse = #80ffff) within 1 ms of the report; 61 reports/s 
 `devmode on` + `fwpull 76` on A: linked in 0.4 s, 1,124,336 bytes in 51.0 s (21.4 KB/s, 0 resent), restart on
 ota_1, confirmed after 60 s. Tagged v0.1.0-rc.1. Open: pull rate (check PHY/DLE on the sender), a swipe sends
 a short hold, scan 50/50 ms not tried.
+
+## 2026-10-31: the pull rate, from the sender's side
+
+Board A on the PC as the sender (test builds rc.3 to rc.5), B and C on chargers pulling. The link was never the
+problem: `fw: link` lines showed 2M PHY, data length 251, 7.5 ms, MTU 512, all granted, and still 22.5 KB/s with the
+sender spending 48 of 49 s waiting for mbufs: the controller sent one packet per connection event while the flood's
+continuous scan was open. A `fwtune probe=200` stop (the sender aborts after 200 KB, the dev peer retries 30 s later)
+let eight settings be compared in six minutes without re-flashing B or C: the scan window during the transfer is
+the only knob that matters (100 ms 22 KB/s, 50 ms 40, 30 ms 52, none 75); advertising, the window, the event
+length and the order of the link procedures do nothing. Shipped: 30 ms of scan per 100 ms while serving.
+Full pulls of the rc.5 image (1,136,224 bytes) read on the sender: to B in 20.9 s (52.9 KB/s, stream 53.4, 0 resent, window wait 156 ms), to C in 22.1 s (50.1 KB/s, 0 resent), with `mesh: peer` lines from the third board arriving during both transfers; C's first attempt lost the link at 676 KB (the peer dropped out, cause not visible from A) and succeeded 30 s later. Labels rc.2 to rc.4 were used up by test builds the boards pulled (rc.2 by another agent's display
+work, rc.3 and rc.4 by two pulls that completed before the probe knob was set), so the release candidate is rc.5.
