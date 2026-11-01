@@ -110,14 +110,19 @@ Measured on board A alone, 2026-10-31 (v0.1.0-rc.0 test builds):
   `CONFIG_BT_NIMBLE_HOST_QUEUE_CONG_CHECK=y` (the research report's table recommended it) makes the host pass each
   address once per ~200 reports (`ble_hs_hci_evt.c`, `ble_check_adv_list`). With it off: 71-75 reports/s from ~13
   neighbours at a 100/100 ms scan; the strongest steady neighbour (-51 dBm) is heard 17.4 times/s, one report every
-  ~57 ms, largest gap 163 ms, no multi-second hole. The true per-event percentage needs a second ColorMesh board
-  (it sends exactly 50/s): fill in after the three-board test.
+  ~57 ms, largest gap 163 ms, no multi-second hole. Three boards (A on the PC, B and C on chargers, same desk): A hears 61 ColorMesh reports/s of the 100/s
+  the two peers send (61 % per event at the 100/100 ms scan; 127 reports/s in all with the neighbours). A peer's
+  hold or release reaches A's mix within 0-1 ms of the report; the 20 ms advertising makes a missed event cost
+  20 ms. Blue + chartreuse gave #80ffff (additive, normalised).
 - Risk 3: at ~75 reports/s the report queue never holds more than 1 of 32, the GAP callback takes at most 67 us,
   drops 0 (`where`: `ble_q=1/32 ble_cb=67us ble_drop=0`).
 - Risk 7: `heap` after host sync: internal 149 KB free, largest block 78 KB, PSRAM 5552 KB; app .bin 1,091,024 bytes
   (3 MB slot). NimBLE host pools stay in internal RAM (`MEM_ALLOC_MODE_INTERNAL`).
 - Hold to mix on the own board: `mesh: hold on` to `mesh: mix` 1-2 ms; release 20 ms.
-- Risk 5 (transfer rate with LVGL running): measured with the two-board firmware pull (see HISTORY once done).
+- Risk 5: the dev-mode pull A <- B (forced `fwpull`, A receiving, display on): 1,124,336 bytes in 51.0 s, 21.4 KB/s,
+  0 resent, MTU 512; then `fw: pending verify` and `fw: confirmed` 60 s after the restart, `fwinfo state=valid`.
+  Below the 40 KB/s goal: the sender's `fw: link` line (PHY, DLE, interval) was not visible (B on a charger); next
+  step is to read it on the PC and check that 2M PHY and DLE 251 were granted.
 
 
 ## Display pipeline
