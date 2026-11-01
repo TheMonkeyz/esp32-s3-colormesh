@@ -5,6 +5,17 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.1.0 - 2026-10-31
+First release. Everything from the release candidates below:
+- Pick your colour on a ring of 12 at start-up, or any time with a swipe right from the main screen.
+- Touch and hold the screen: every ColorMesh board nearby, yours included, shows the mix of the held colours
+  within one 20 ms advertising event.
+- Main screen: your colour as a ring, the mix in the centre, a dot per board nearby; a system page by swipe left.
+- Configure over USB from the installer page (Chrome or Edge): colour, name, dev mode, brightness.
+- Dev mode (on by default): a board that hears a nearby board with a newer firmware pulls it over Bluetooth
+  (1.1 MB in about 21 s) and switches to it after a successful start.
+- Tear-free display, swipes that send no colour, test harness over USB.
+
 ## v0.1.0-rc.7 - 2026-10-31
 - A swipe no longer sends your colour: the hold ends the moment the finger starts a swipe (14 ms instead of 400).
 
