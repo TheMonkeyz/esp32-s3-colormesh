@@ -1,7 +1,7 @@
 """ColorMesh's own tests (main/: the pager's pick ring | main | system pages, the Bluetooth mesh through the console).
 Same registry (@test from board.py), same ctx as core_suites.py. The board has no network: every test goes through
 the USB console and the serial log (docs/PROTOCOL.md; the commands: color, color2, devmode, name, bright, peers, cfg,
-hold, shot, plus forge_lvgl's screen / tap / press / swipe / drag and the board's fps).
+hold, shot, admin, trust, plus forge_lvgl's screen / tap / press / swipe / drag and the board's fps).
 
     APP_ORDER       the app's suites, run after the core start-up checks (harness.py)
     APP_WATCH       log lines that aren't failures but must not go unseen: (regex, what), counted per test
@@ -336,6 +336,71 @@ def color2(ctx):
     finally:
         put_back_color2(b, saved, now)
     ctx.note(f'color2 {GREEN} then auto, both in cfg; the wave colour {saved} put back')
+
+
+ADMIN_KEY = r'test: admin key ([A-Za-z0-9+/]{86}==)'             # 64 bytes X || Y: 88 base64 characters
+ADMIN_ON = r'test: ok admin on ([A-Za-z0-9+/]{8})'
+SELFTEST = r'test: ok admin selftest (\d+) sign_ms=(\d+) verify_ms=(\d+) tamper=(\w+) stack_free=(\d+)'
+# the firmware ends it with U+2026; the flash helper writes its log as ASCII, where that arrives as '???'
+TRUST_OK = r'test: ok trust ([A-Za-z0-9+/]{8})(?:\u2026|\?{1,3})'
+TRUST_SHOW = r'test: trust ([A-Za-z0-9+/]{86}==|none)'
+SELFTEST_MS_MAX = 3000                                 # sign + verify on the ESP32-S3 (software P-256)
+STACK_FREE_MIN = 512                                   # bytes left on the fw task's stack after the ECDSA
+
+
+@test('mesh')
+def admin(ctx):
+    """Secure updates on one board, over the console: `admin on` (a key pair if none: `fw: admin on (key <short>)`),
+    `admin key` (88 base64 characters, the short id its first 8), `admin selftest` (ECDSA sign and verify, a changed
+    message refused, at most SELFTEST_MS_MAX ms, STACK_FREE_MIN bytes of stack left), `cfg` with "admin": true and
+    "admin_key" that key; `trust <that key>` -> `test: ok trust <short>…` and "trusted" = the short id in `cfg`;
+    `trust none` -> "trusted": null; `admin off` -> "admin": false, "admin_key": null. The board's own admin state and
+    trusted key are put back."""
+    b = ctx.board
+    before = b.cfg()
+    check('admin' in before and 'trusted' in before, '"cfg" has no "admin" / "trusted": a firmware without secure updates')
+    was_admin = before.get('admin') is True
+    saved_trust = b.cmd('trust', TRUST_SHOW).group(1)
+    try:
+        at = len(ctx.log.lines())
+        short = b.cmd('admin on', ADMIN_ON, timeout=20).group(1)
+        ctx.log.wait(r'fw: admin on \(key ' + re.escape(short) + r'\)', 3, 'the fw line of "admin on"', start=at)
+        key = b.cmd('admin key', ADMIN_KEY).group(1)
+        check(len(key) == 88 and key.startswith(short), f'"admin key" gave {len(key)} characters, short id {short}')
+        m = b.cmd('admin selftest', SELFTEST, timeout=20)
+        ms, sign_ms, verify_ms, tamper, stack = (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4),
+                                                 int(m.group(5)))
+        check(tamper == 'refused', f'admin selftest: a changed message was {tamper}')
+        check(ms <= SELFTEST_MS_MAX, f'admin selftest took {ms} ms (at most {SELFTEST_MS_MAX})')
+        check(stack >= STACK_FREE_MIN, f'admin selftest left {stack} bytes of the fw stack (at least {STACK_FREE_MIN})')
+        c = b.cfg()
+        check(c.get('admin') is True, f'after "admin on", cfg says admin {c.get("admin")}')
+        check(c.get('admin_key') == key, f'cfg admin_key {c.get("admin_key")!r} is not the "admin key" answer')
+        got = b.cmd(f'trust {key}', TRUST_OK, timeout=10).group(1)
+        check(got == short, f'"trust <key>" answered {got}, the short id is {short}')
+        c = b.cfg()
+        check(c.get('trusted') == short, f'after "trust", cfg says trusted {c.get("trusted")!r}')
+        b.cmd('trust none', r'test: ok trust none')
+        c = b.cfg()
+        check(c.get('trusted') is None, f'after "trust none", cfg says trusted {c.get("trusted")!r}')
+        b.cmd('admin off', r'test: ok admin off')
+        c = b.cfg()
+        check(c.get('admin') is False and c.get('admin_key') is None,
+              f'after "admin off", cfg says admin {c.get("admin")} admin_key {c.get("admin_key")!r}')
+    finally:
+        put_back_admin(b, was_admin, saved_trust)
+    ctx.note(f'admin key {short}…: selftest {ms} ms (sign {sign_ms}, verify {verify_ms}), fw stack {stack} B left; '
+             f'trust / none / admin off in cfg; admin {"on" if was_admin else "off"} and trust '
+             f'{"none" if saved_trust == "none" else saved_trust[:8] + "…"} put back')
+
+
+def put_back_admin(b, was_admin, saved_trust):
+    """The admin state and the trusted key the board had before the admin test (the user's pairing, in NVS)."""
+    if saved_trust and saved_trust != 'none':
+        b.cmd(f'trust {saved_trust}', TRUST_OK, timeout=10)
+    else:
+        b.cmd('trust none', r'test: ok trust none')
+    b.cmd('admin on' if was_admin else 'admin off', ADMIN_ON if was_admin else r'test: ok admin off', timeout=20)
 
 
 # ---------------------------------------------------------------- perf

@@ -54,7 +54,7 @@ typedef struct {
 
 // ---- state ----
 
-static volatile bool holding, dev_mode, connectable, adv_paused, scan_paused, synced;
+static volatile bool holding, dev_mode, admin, connectable, adv_paused, scan_paused, synced;
 static volatile uint8_t own_r, own_g, own_b, target = MP_TARGET_NONE;
 static volatile uint32_t own_b2;        // the waves' colour B: 0x01rrggbb when chosen, 0 = automatic (one word: no torn read)
 static uint8_t own_addr_type;
@@ -265,7 +265,7 @@ static void do_refresh(void)
     s.origin = own_origin;
     s.seq = ++seq;
     s.ttl = 0;
-    s.flags = (dev_mode ? MP_F_DEV : 0) | ota_flags();
+    s.flags = (dev_mode ? MP_F_DEV : 0) | (admin ? MP_F_ADMIN : 0) | ota_flags();
     s.r = own_r;
     s.g = own_g;
     s.b = own_b;
@@ -326,8 +326,9 @@ static void after_change(void)
         fmt_ver(v, sizeof(v), s->ver);
         char extra[16] = "";
         if (s->target != MP_TARGET_NONE) snprintf(extra, sizeof(extra), " target=%02x", s->target);
-        ESP_LOGI(TAG, "peer %s %s #%02x%02x%02x %s%s%s", a, v, s->r, s->g, s->b,
-                 (s->flags & MP_F_HOLDING) ? "hold" : "idle", (s->flags & MP_F_DEV) ? " dev" : "", extra);
+        ESP_LOGI(TAG, "peer %s %s #%02x%02x%02x %s%s%s%s", a, v, s->r, s->g, s->b,
+                 (s->flags & MP_F_HOLDING) ? "hold" : "idle", (s->flags & MP_F_DEV) ? " dev" : "",
+                 (s->flags & MP_F_ADMIN) ? " admin" : "", extra);
     }
     for (int j = 0; j < MP_MAX_PEERS; j++) {
         if (!shadow[j].used) continue;
@@ -594,6 +595,7 @@ void mesh_start(void)
     own_g = c->g;
     own_b = c->b;
     dev_mode = c->dev_mode;
+    admin = c->admin;
     own_b2 = c->b2_set ? 0x01000000u | (uint32_t)c->b2_r << 16 | (uint32_t)c->b2_g << 8 | c->b2_b : 0;
     mp_ver_from_string(esp_app_get_description()->version, own_ver);
     mp_table_init(&table, 0, 0);
@@ -652,6 +654,14 @@ void mesh_set_dev_mode(bool on)
 {
     if (on == dev_mode) return;
     dev_mode = on;
+    refresh_req = true;
+    wake();
+}
+
+void mesh_set_admin(bool on)
+{
+    if (on == admin) return;
+    admin = on;
     refresh_req = true;
     wake();
 }
@@ -737,6 +747,7 @@ int mesh_peers(mesh_peer_t *out, int max)
         o->holding = p->st.flags & MP_F_HOLDING;
         o->dev = p->st.flags & MP_F_DEV;
         o->servable = p->st.flags & MP_F_SERVABLE;
+        o->admin = p->st.flags & MP_F_ADMIN;
         memcpy(o->ver, p->st.ver, 4);
         o->rssi = p->rssi;
         o->last_ms = p->last_ms;

@@ -23,6 +23,7 @@
 #define MP_F_DEV        0x02      // dev mode
 #define MP_F_SERVABLE   0x04      // the running image is valid and can be served to a dev-mode peer
 #define MP_F_PENDING    0x08      // the running image is still pending verification
+#define MP_F_ADMIN      0x10      // this board is the admin: it signs its image for peers out of dev mode (mesh_fw.c)
 #define MP_TARGET_NONE  0xFF
 // ver[3], the version kind (same order as forge_core version.h, finer among test labels):
 // vX.Y.Z-x.N -> N (0-99) < -rc.N -> 100+N (100-199) < release 200 < vX.Y.Z-N-gHASH -> 201+N (201-255)

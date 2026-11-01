@@ -17,6 +17,7 @@
 #include "screens.h"
 #include "board.h"
 #include "config.h"
+#include "fw_auth.h"
 #include "mesh.h"
 #include "mesh_fw.h"
 #include "ui.h"
@@ -164,11 +165,24 @@ static void cmd_cfg(int argc, char **argv)
     char name[40], c2[8] = "auto";
     json_str(name, sizeof(name), c->name);
     if (c->b2_set) snprintf(c2, sizeof(c2), "#%02x%02x%02x", c->b2_r, c->b2_g, c->b2_b);
+    // Secure updates: "admin_key" is this board's public key while it is the admin, "trusted" the short id of the
+    // admin key it trusts (the first 8 base64 characters)
+    char akey[FWA_B64_PUB_LEN + 3] = "null", tkey[FWA_SHORT_LEN + 3] = "null";
+    if (c->admin && c->has_admin_key) {
+        akey[0] = '"';
+        fwa_b64_encode(c->admin_pub, FWA_PUB_LEN, akey + 1, sizeof(akey) - 2);
+        strlcat(akey, "\"", sizeof(akey));
+    }
+    if (c->has_trusted) {
+        tkey[0] = '"';
+        fwa_short_id(c->trusted, tkey + 1);
+        strlcat(tkey, "\"", sizeof(tkey));
+    }
     int n = snprintf(js, sizeof(js),
                      "{\"color\":\"#%02x%02x%02x\",\"color2\":\"%s\",\"dev\":%s,\"name\":\"%s\",\"bright\":%u,"
-                     "\"version\":\"%s\",\"addr\":\"%s\",\"peers\":[",
+                     "\"version\":\"%s\",\"addr\":\"%s\",\"admin\":%s,\"admin_key\":%s,\"trusted\":%s,\"peers\":[",
                      c->r, c->g, c->b, c2, c->dev_mode ? "true" : "false", name, c->bright,
-                     esp_app_get_description()->version, mesh_own_addr());
+                     esp_app_get_description()->version, mesh_own_addr(), c->admin ? "true" : "false", akey, tkey);
     int np = mesh_peers(peers, 16);
     for (int i = 0; i < np && i < 16 && n < (int)sizeof(js) - 100; i++) {
         const mesh_peer_t *p = &peers[i];
@@ -219,6 +233,57 @@ static void cmd_fwpull(int argc, char **argv)
     if (!ok) { ESP_LOGW(TAG, "error fwpull: expected an address or its last byte (9a)"); return; }
     mesh_fw_set_target((uint8_t)v);
     ESP_LOGI(TAG, "ok fwpull %02x", v);
+}
+
+/* ---------- secure updates ----------
+ * "admin on|off|key|new|selftest" (the board that signs its image for boards out of dev mode), "admin" alone: the
+ * state. "trust <base64 of the admin's 64-byte public key>" (88 characters; the console line holds 119), "trust none",
+ * "trust" alone: the trusted key in full (it is public), for the harness to put it back. The work that needs the
+ * ECDSA runs in the fw task (mesh_fw_admin), which answers the "test: ok ..." line. */
+static void cmd_admin(int argc, char **argv)
+{
+    const app_cfg_t *c = config_get();
+    const char *op = argc == 2 ? argv[1] : argc == 1 ? "" : "?";
+    if (!*op) {
+        char k[FWA_SHORT_LEN + 1] = "none", t[FWA_SHORT_LEN + 1] = "none";
+        if (c->has_admin_key) fwa_short_id(c->admin_pub, k);
+        if (c->has_trusted) fwa_short_id(c->trusted, t);
+        ESP_LOGI(TAG, "admin %s key %s trusted %s", c->admin ? "on" : "off", k, t);
+    } else if (!strcmp(op, "on")) {
+        mesh_fw_admin(MESH_FW_ADMIN_ON);
+    } else if (!strcmp(op, "off")) {
+        mesh_fw_admin(MESH_FW_ADMIN_OFF);
+    } else if (!strcmp(op, "new")) {
+        mesh_fw_admin(MESH_FW_ADMIN_NEW);
+    } else if (!strcmp(op, "selftest")) {
+        mesh_fw_admin(MESH_FW_ADMIN_SELFTEST);
+    } else if (!strcmp(op, "key")) {
+        if (!c->has_admin_key) { ESP_LOGW(TAG, "error admin key: no key yet (admin on makes one)"); return; }
+        char b[FWA_B64_PUB_LEN + 1];
+        fwa_b64_encode(c->admin_pub, FWA_PUB_LEN, b, sizeof(b));
+        ESP_LOGI(TAG, "admin key %s", b);
+    } else {
+        ESP_LOGW(TAG, "error admin: expected on|off|key|new|selftest");
+    }
+}
+
+static void cmd_trust(int argc, char **argv)
+{
+    const app_cfg_t *c = config_get();
+    if (argc == 1) {
+        char b[FWA_B64_PUB_LEN + 1] = "none";
+        if (c->has_trusted) fwa_b64_encode(c->trusted, FWA_PUB_LEN, b, sizeof(b));
+        ESP_LOGI(TAG, "trust %s", b);
+        return;
+    }
+    if (argc != 2) { ESP_LOGW(TAG, "error trust: expected a base64 public key or none"); return; }
+    if (!strcmp(argv[1], "none")) { mesh_fw_trust(NULL); return; }
+    uint8_t pub[FWA_PUB_LEN + 3];
+    if (strlen(argv[1]) != FWA_B64_PUB_LEN || fwa_b64_decode(argv[1], pub, sizeof(pub)) != FWA_PUB_LEN) {
+        ESP_LOGW(TAG, "error trust: expected the %d-character base64 key that \"admin key\" prints", FWA_B64_PUB_LEN);
+        return;
+    }
+    if (!mesh_fw_trust(pub)) ESP_LOGW(TAG, "error trust: busy, try again");
 }
 
 /* ---------- shot ----------
@@ -352,4 +417,6 @@ void console_init(void)
     testcon_register("shot", "shot [screen] [div]", cmd_shot);
     testcon_register("fwpull", "fwpull ADDR|ORIGIN", cmd_fwpull);
     testcon_register("wave", "wave centre|left|right|top|bottom", cmd_wave);
+    testcon_register("admin", "admin [on|off|key|new|selftest]", cmd_admin);
+    testcon_register("trust", "trust [KEY|none]", cmd_trust);
 }

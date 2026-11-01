@@ -16,7 +16,7 @@ MAIN := ../../main
 OUT := build
 CFLAGS := -std=gnu11 -D_DEFAULT_SOURCE -g -O1 -Wall -Wno-unused-function -fsanitize=address,undefined \
           -fno-sanitize-recover=undefined -Ishim -I$(CORE)/include -I$(MAIN) -include shim/host.h
-TESTS := utf8 version textfit pager testcon i18n mesh wave
+TESTS := utf8 version textfit pager testcon i18n mesh wave fw_auth
 
 all: $(TESTS:%=$(OUT)/test_%)
 	@set -e; for t in $(TESTS); do ./$(OUT)/test_$$t; done
@@ -49,6 +49,10 @@ $(OUT)/bench_wave: $(WAVE_DEP) | $(OUT)
 	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -O2 -I$(MAIN) -o $@ $(WAVE_SRC) -lm
 bench: $(OUT)/bench_wave
 	./$(OUT)/bench_wave
+# fw_auth.c (the signed pull's layouts and checks) is pure C99 as well, with mesh_proto.c for the version compare
+FWA_SRC := test_fw_auth.c $(MAIN)/fw_auth.c $(MAIN)/mesh_proto.c
+$(OUT)/test_fw_auth: $(FWA_SRC) $(MAIN)/fw_auth.h $(MAIN)/mesh_proto.h check.h | $(OUT)
+	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined 	    -I$(MAIN) -o $@ $(FWA_SRC)
 
 $(OUT):
 	mkdir -p $(OUT)

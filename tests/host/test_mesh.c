@@ -195,6 +195,22 @@ static void test_table(void)
     CHECK(mp_table_update(&t, A, &nohold, -40, 1080), "release is a change");
     mp_state_t dev = state(13, MP_F_DEV, 0, 0, 255);
     CHECK(mp_table_update(&t, A, &dev, -40, 1100), "dev mode is a change");
+    {                                      // the admin bit (bit 4) on, then off again: both are changes
+        mp_table_t ta;
+        mp_table_init(&ta, 0, 0);
+        mp_state_t adm = state(40, MP_F_DEV, 0, 0, 255);
+        mp_table_update(&ta, A, &adm, -40, 1000);
+        adm.seq = 41;
+        adm.flags |= MP_F_ADMIN;
+        CHECK(mp_table_update(&ta, A, &adm, -40, 1001), "admin on is a change");
+        CHECK(ta.peers[0].st.flags == (MP_F_DEV | MP_F_ADMIN), "the admin bit is stored");
+        CHECK(!mp_table_update(&ta, A, &adm, -40, 1002), "admin again is no change");
+        adm.seq = 42;
+        adm.flags &= (uint8_t)~MP_F_ADMIN;
+        CHECK(mp_table_update(&ta, A, &adm, -40, 1003), "admin off is a change");
+        CHECK(MP_F_ADMIN == 0x10 && !(MP_F_ADMIN & (MP_F_HOLDING | MP_F_DEV | MP_F_SERVABLE | MP_F_PENDING)),
+              "MP_F_ADMIN is bit 4, apart from the others");
+    }
     mp_state_t newer_ver = dev;
     newer_ver.seq = 14;
     newer_ver.ver[3] = MP_VER_RELEASE;

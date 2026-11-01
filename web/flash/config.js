@@ -1,7 +1,9 @@
 // Configure over USB: the flasher page's card talks to a ColorMesh board through Web Serial (Chrome / Edge on a
 // computer, https or localhost) at 115200 baud, using the firmware's USB console (docs/PROTOCOL.md §2): `cfg`
 // answers one JSON line `test: cfg {...}`; `color RRGGBB`, `color2 RRGGBB|auto` (the waves' second colour),
-// `name <text>`, `devmode on|off` and `bright N` set the values and answer `test: ok ...` or `test: error ...`. The console's answers are ESP-IDF log lines
+// `name <text>`, `devmode on|off` and `bright N` set the values and answer `test: ok ...` or `test: error ...`;
+// secure updates: `admin on|off` (this board signs its firmware for boards out of dev mode), `trust <key>` /
+// `trust none` (the admin key a board accepts; cfg's "admin", "admin_key", "trusted"). The console's answers are ESP-IDF log lines
 // (`I (1234) test: ...`), so the parser tolerates that prefix, colour codes and CRLF. The pure functions are
 // exported for web/flash/config.test.js (Node, no dependencies); the DOM part runs only in a browser.
 'use strict';
@@ -70,8 +72,34 @@ function oppositeHex(hex) {
   return c.map(v => (s - v).toString(16).padStart(2, '0')).join('');
 }
 
+// Secure updates from cfg: {admin, adminKey, trusted} (adminKey: the board's own public key while it is the admin,
+// trusted: the short id, the first 8 characters, of the key it trusts), or null for a firmware without them
+function secureState(c) {
+  if (!c || typeof c.admin !== 'boolean' || !('trusted' in c)) return null;
+  const key = typeof c.admin_key === 'string' && isAdminKey(c.admin_key) ? c.admin_key : null;
+  const t = typeof c.trusted === 'string' && /^[A-Za-z0-9+/]{8}$/.test(c.trusted) ? c.trusted : null;
+  return { admin: c.admin, adminKey: c.admin ? key : null, trusted: t };
+}
+
+// An admin public key as `admin key` prints it: 64 bytes in base64, 88 characters ending in "=="
+function isAdminKey(s) { return /^[A-Za-z0-9+/]{86}==$/.test(String(s)); }
+
+// The console command for a pasted key: spaces and line breaks taken out (a key copied from a wrapped line);
+// "none" (or an empty field) -> "trust none"; anything that is not a key -> null
+function trustCommand(v) {
+  const k = String(v === undefined || v === null ? '' : v).replace(/\s+/g, '');
+  if (k === '' || k === 'none') return 'trust none';
+  return isAdminKey(k) ? 'trust ' + k : null;
+}
+
+function adminCommand(on) { return on ? 'admin on' : 'admin off'; }
+
+// The short id of a key (what the board shows in its log lines and cfg's "trusted"): its first 8 characters
+function shortId(key) { return isAdminKey(key) ? key.slice(0, 8) : null; }
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseLine, extractCfg, splitLines, hexColor, presetHex, color2State, color2Command, oppositeHex };
+  module.exports = { parseLine, extractCfg, splitLines, hexColor, presetHex, color2State, color2Command, oppositeHex,
+                     secureState, isAdminKey, trustCommand, adminCommand, shortId };
 }
 
 if (typeof document !== 'undefined') initConfigCard();
@@ -160,6 +188,14 @@ function initConfigCard() {
     el('cfg-dev').checked = !!c.dev;
     const b = Number.isFinite(c.bright) ? Math.max(0, Math.min(100, c.bright)) : 100;
     el('cfg-bright').value = b; el('cfg-bright-v').textContent = b + ' %';
+    const sec = secureState(c);
+    el('cfg-secure').hidden = !sec;                  // an older firmware: no secure updates
+    if (sec) {
+      el('cfg-admin').checked = sec.admin;
+      el('cfg-admin-box').hidden = !sec.adminKey;
+      el('cfg-admin-key').textContent = sec.adminKey || '';
+      el('cfg-trust-now').textContent = sec.trusted ? 'trusts the admin key ' + sec.trusted + '…' : 'trusts no admin key';
+    }
     el('cfg-version').textContent = c.version || '?';
     el('cfg-addr').textContent = c.addr || '?';
     const peers = Array.isArray(c.peers) ? c.peers : [];
@@ -167,7 +203,8 @@ function initConfigCard() {
       `<li><span class="dot" style="background:#${hexColor(p.color) || '000000'}"></span>${esc(p.addr || '?')}` +
       ` · v${esc(String(p.ver || '?').replace(/^v/, ''))} · ${p.holding ? 'holding' : 'idle'}</li>`).join('')
       : '<li class="muted">none</li>';
-    say('Connected: ' + (c.name ? c.name + ' · ' : '') + (c.version || 'ColorMesh') + (c.dev ? ' · dev mode' : ''));
+    say('Connected: ' + (c.name ? c.name + ' · ' : '') + (c.version || 'ColorMesh') + (c.dev ? ' · dev mode' : '') +
+        (sec && sec.admin ? ' · admin' : ''));
   }
 
   function onLine(raw) {
@@ -247,6 +284,19 @@ function initConfigCard() {
   el('cfg-name-set').onclick = () => { send('name ' + el('cfg-name').value.trim().slice(0, 16)); refreshSoon(); };
   el('cfg-name').onkeydown = ev => { if (ev.key === 'Enter') el('cfg-name-set').click(); };
   el('cfg-dev').onchange = ev => { send('devmode ' + (ev.target.checked ? 'on' : 'off')); refreshSoon(); };
+  el('cfg-admin').onchange = ev => { send(adminCommand(ev.target.checked)); refreshSoon(); };
+  el('cfg-admin-copy').onclick = async () => {
+    const k = el('cfg-admin-key').textContent;
+    try { await navigator.clipboard.writeText(k); say('Admin key copied: paste it into the other boards\' "Trusted admin key".'); }
+    catch (e) { say('Could not copy: select the key and copy it by hand.', true); }
+  };
+  el('cfg-trust-set').onclick = () => {
+    const cmd = trustCommand(el('cfg-trust').value);
+    if (!cmd || cmd === 'trust none') { say('Paste the admin board\'s key: 88 characters ending in "==".', true); return; }
+    send(cmd); el('cfg-trust').value = ''; refreshSoon();
+  };
+  el('cfg-trust').onkeydown = ev => { if (ev.key === 'Enter') el('cfg-trust-set').click(); };
+  el('cfg-trust-forget').onclick = () => { send('trust none'); refreshSoon(); };
   el('cfg-bright').oninput = ev => { el('cfg-bright-v').textContent = ev.target.value + ' %'; };
   el('cfg-bright').onchange = ev => { send('bright ' + ev.target.value); refreshSoon(); };
   window.addEventListener('beforeunload', () => { if (port) { try { port.close(); } catch (e) {} } });

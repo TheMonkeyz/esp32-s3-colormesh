@@ -234,3 +234,19 @@ wave 29 fps, fill 6.2 ms; five waves 21 fps, fill 24 ms avg / 60 max. Console `w
 frame; `shot main` shows the LVGL page underneath). Peer waves verified on three boards: centre from one, left
 from another, both merged.
 
+### Secure updates: the paired admin board (main/mesh_fw.c, fw_auth.c; v0.4.0)
+
+The user chose a paired admin over signed releases. The admin board (`admin on`) holds an ECDSA P-256 key pair
+(NVS `adm_priv` 32 bytes, `adm_own` 64 bytes; plain flash: whoever holds the admin board can push firmware) and
+advertises flag bit4 `MP_F_ADMIN`. Other boards store the admin's public key once over USB (`trust <base64>`, NVS
+`adm_pub`). A board out of dev mode with a trusted key targets only an admin peer with a newer servable version.
+On the link: the admin writes CTRL 04 (challenge request); the receiver notifies a fresh 32-byte nonce (ACK, sector
+0xFFFE, status 3, single use, 10 s); the admin answers CTRL 03 = nonce, image length, SHA-256 digest, version (32
+bytes) and a deterministic ECDSA signature (r||s) over SHA-256 of those 100 bytes; the receiver checks nonce,
+version strictly newer, signature (constant-time compares, keys zeroed after use), notifies a verdict (status 4),
+then accepts only a START whose length and digest are the signed ones, requires the image's own version to equal the
+signed one, hashes every byte it writes and compares with the signed digest before `esp_ota_end`. Refusals log
+`fw: refused <addr>: no proof | bad signature | nonce ... | START does not match the signed image` and back off
+30 s. Dev mode: the proof is checked when offered, never required. fw task stack 6 KB; the DRBG and buffers in
+PSRAM; +48 KB flash; sign ~110 ms, verify ~215 ms on the board. Host tests: tests/host/test_fw_auth.c (81 checks).
+

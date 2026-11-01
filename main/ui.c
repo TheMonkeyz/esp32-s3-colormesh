@@ -58,6 +58,8 @@ static const char *const page_name[PG_N] = { "pick", "main", "system" };
 static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *scr_msg;
 static lv_obj_t *p_title, *p_sub, *p_back, *p_sw[SW_N], *p_dot[SW_N];
 static lv_obj_t *mn_ring, *mn_disc, *mn_arc, *mn_hint, *mn_near, *mn_dev, *mn_dot[MAX_DOTS];
+static lv_obj_t *mn_pills, *mn_admin;     // the DEV and ADMIN pills side by side (a flex row skips a hidden one)
+#define C_ADMIN  lv_color_hex(0xFFB020)       // the admin pill: amber, apart from DEV's blue
 static lv_obj_t *s_title, *s_lines, *s_peers, *s_row[SYS_ROWS], *s_sw[SYS_ROWS];
 static lv_obj_t *m_title, *m_body;
 static bool ui_hold;                          // the finger on the main page started a hold (not the console)
@@ -261,7 +263,7 @@ static void pick_create_page(lv_obj_t *pg)
 // The last values drawn (UINT32_MAX / -2: nothing drawn yet)
 static struct {
     uint32_t own, mix;
-    bool dev;
+    bool dev, admin;
     int prog, npeers;
     uint32_t dots[MAX_DOTS];          // rgb | holding << 24
 } last = { .own = UINT32_MAX, .mix = UINT32_MAX, .prog = -2, .npeers = -1 };
@@ -287,6 +289,10 @@ static void main_update(bool texts)
     if (c->dev_mode != last.dev) {
         last.dev = c->dev_mode;
         set_hidden(mn_dev, !c->dev_mode);
+    }
+    if (c->admin != last.admin) {
+        last.admin = c->admin;
+        set_hidden(mn_admin, !c->admin);
     }
     int prog = mesh_fw_progress();
     if (prog != last.prog) {
@@ -319,6 +325,7 @@ static void main_update(bool texts)
     if (texts) {
         set_text(mn_hint, tr(T_HOLD_HINT));
         set_text(mn_dev, tr(T_DEV));
+        set_text(mn_admin, tr(T_ADMIN));
     }
 }
 
@@ -398,13 +405,26 @@ static void main_create_page(lv_obj_t *pg)
 
     mn_hint = label(pg, f_small, C_HINT, 0, 280);
     lv_obj_align(mn_hint, LV_ALIGN_CENTER, 0, 0);
-    mn_dev = label(pg, f_tiny, C_BG, 40, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(mn_dev, C_ACCENT, 0);
-    lv_obj_set_style_bg_opa(mn_dev, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(mn_dev, 10, 0);
-    lv_obj_set_style_pad_hor(mn_dev, 12, 0);
-    lv_obj_set_style_pad_ver(mn_dev, 3, 0);
-    lv_obj_add_flag(mn_dev, LV_OBJ_FLAG_HIDDEN);
+    mn_pills = lv_obj_create(pg);                 // at y 40, centred: one pill or both with an 8 px gap
+    lv_obj_remove_style_all(mn_pills);
+    lv_obj_set_size(mn_pills, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(mn_pills, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(mn_pills, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(mn_pills, 8, 0);
+    lv_obj_remove_flag(mn_pills, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(mn_pills, LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_align(mn_pills, LV_ALIGN_TOP_MID, 0, 40);
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *l = label(mn_pills, f_tiny, C_BG, 0, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(l, i ? C_ADMIN : C_ACCENT, 0);
+        lv_obj_set_style_bg_opa(l, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(l, 10, 0);
+        lv_obj_set_style_pad_hor(l, 12, 0);
+        lv_obj_set_style_pad_ver(l, 3, 0);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+        if (i) mn_admin = l;
+        else mn_dev = l;
+    }
     for (int i = 0; i < MAX_DOTS; i++) {
         lv_obj_t *d = mn_dot[i] = shape(pg, 2 * DOT_R);
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);

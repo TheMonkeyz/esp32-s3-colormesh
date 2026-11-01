@@ -55,6 +55,48 @@ t('the automatic wave colour is the opposite hue (wave_opposite)', () => {
   assert.strictEqual(c.oppositeHex('00ff00'), 'ff00ff'); assert.strictEqual(c.oppositeHex('808080'), '808080');
   assert.strictEqual(c.oppositeHex('c86432'), '3296c8'); assert.strictEqual(c.oppositeHex('xyz'), null);
 });
+// ---- secure updates
+const KEY = 'wmg5gDSUg0k8gAEE1eXE09CFB7MxdtkqAgNZgBWyInBOIbaBwgZLKpdqtTu0cmQc5qlNwFMKwLyGn+CojO0dzQ==';
+t('cfg of an admin board', () => {
+  const o = c.extractCfg('cfg {"color":"#ff0000","dev":true,"version":"v0.3.0-1-gadmin","addr":"b8:1f:3f:c8:75:9a","admin":true,"admin_key":"' + KEY + '","trusted":null,"peers":[]}');
+  assert.deepStrictEqual(c.secureState(o), { admin: true, adminKey: KEY, trusted: null });
+});
+t('cfg of a board that trusts an admin', () => {
+  const o = c.extractCfg('cfg {"dev":false,"admin":false,"admin_key":null,"trusted":"wmg5gDSU","peers":[]}');
+  assert.deepStrictEqual(c.secureState(o), { admin: false, adminKey: null, trusted: 'wmg5gDSU' });
+});
+t('cfg of an older firmware: no secure updates', () => {
+  assert.strictEqual(c.secureState(c.extractCfg('cfg ' + CFG)), null);
+  assert.strictEqual(c.secureState(null), null);
+  assert.strictEqual(c.secureState({ admin: 'yes', trusted: null }), null);
+});
+t('secure state ignores a malformed key or short id', () => {
+  assert.deepStrictEqual(c.secureState({ admin: true, admin_key: 'short', trusted: 'way too long' }),
+    { admin: true, adminKey: null, trusted: null });
+  assert.deepStrictEqual(c.secureState({ admin: false, admin_key: KEY, trusted: null }),
+    { admin: false, adminKey: null, trusted: null });             // the key shows only while the board is the admin
+});
+t('admin keys', () => {
+  assert.strictEqual(KEY.length, 88); assert.strictEqual(c.isAdminKey(KEY), true);
+  assert.strictEqual(c.isAdminKey(KEY.slice(0, 86)), false); assert.strictEqual(c.isAdminKey(KEY.replace('==', 'A=')), false);
+  assert.strictEqual(c.isAdminKey(KEY.slice(0, 85) + '!=='), false); assert.strictEqual(c.isAdminKey(undefined), false);
+  assert.strictEqual(c.shortId(KEY), 'wmg5gDSU'); assert.strictEqual(c.shortId('nope'), null);
+});
+t('trust commands', () => {
+  assert.strictEqual(c.trustCommand(KEY), 'trust ' + KEY);
+  assert.strictEqual(c.trustCommand('  ' + KEY.slice(0, 40) + '\n  ' + KEY.slice(40) + ' '), 'trust ' + KEY);   // wrapped paste
+  assert.strictEqual(c.trustCommand('none'), 'trust none'); assert.strictEqual(c.trustCommand(''), 'trust none');
+  assert.strictEqual(c.trustCommand(undefined), 'trust none');
+  assert.strictEqual(c.trustCommand('not a key'), null); assert.strictEqual(c.trustCommand(KEY + 'A'), null);
+  assert.ok(('trust ' + KEY).length < 120, 'the console line holds 119 characters');
+});
+t('admin commands', () => { assert.strictEqual(c.adminCommand(true), 'admin on'); assert.strictEqual(c.adminCommand(false), 'admin off'); });
+t('the secure-update answers parse', () => {
+  assert.deepStrictEqual(c.parseLine('I (98132) test: ok trust wmg5gDSU\u2026'), { tag: 'test', text: 'ok trust wmg5gDSU\u2026' });
+  assert.deepStrictEqual(c.parseLine('I (84027) test: admin key ' + KEY), { tag: 'test', text: 'admin key ' + KEY });
+  assert.deepStrictEqual(c.parseLine('I (79838) fw: admin on (key wmg5gDSU)'), { tag: 'fw', text: 'admin on (key wmg5gDSU)' });
+});
+
 t('cfg with trailing text', () => assert.strictEqual(c.extractCfg('cfg {"a":1} ').a, 1));
 t('not a cfg line', () => assert.strictEqual(c.extractCfg('ok color #ff8000'), null));
 t('broken JSON', () => assert.strictEqual(c.extractCfg('cfg {"color":'), null));

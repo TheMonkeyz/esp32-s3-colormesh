@@ -851,6 +851,122 @@ class WaveTap(unittest.TestCase):
         self.assertIn('paused', str(e.exception))
 
 
+KEY_A = 'wmg5gDSUg0k8gAEE1eXE09CFB7MxdtkqAgNZgBWyInBOIbaBwgZLKpdqtTu0cmQc5qlNwFMKwLyGn+CojO0dzQ=='   # 88 characters
+KEY_B = 'BBBBBBBB' + KEY_A[8:]
+
+
+class FakeAdmin(FakeLog):
+    """The console's secure-update commands as the firmware answers them: admin on|off|key|selftest, trust KEY|none,
+    trust (the full key), cfg with admin / admin_key / trusted. legacy: a cfg without them; tamper: the selftest
+    accepted a changed message; deaf_trust: "trust" answers ok but cfg never changes; ellipsis: the character after
+    the short id in "ok trust" (the helper's ASCII log turns U+2026 into '???')."""
+
+    def __init__(self, admin=False, key=None, trusted=None, legacy=False, tamper=False, deaf_trust=False,
+                 ellipsis='\u2026'):
+        super().__init__()
+        self.admin, self.key, self.trusted = admin, key, trusted
+        self.legacy, self.tamper, self.deaf_trust, self.ellipsis = legacy, tamper, deaf_trust, ellipsis
+        self.log, self.sent = self, []
+
+    def reply(self, line):
+        if line == 'admin on':
+            self.key = self.key or KEY_A
+            self.admin = True
+            return [f'I (1) fw: admin on (key {self.key[:8]})', f'I (1) test: ok admin on {self.key[:8]}']
+        if line == 'admin off':
+            self.admin = False
+            return ['I (1) fw: admin off', 'I (1) test: ok admin off']
+        if line == 'admin key':
+            return [f'I (1) test: admin key {self.key}'] if self.key else ['W (1) test: error admin key: no key yet']
+        if line == 'admin selftest':
+            return [f'I (1) test: ok admin selftest 331 sign_ms=113 verify_ms=218 '
+                    f'tamper={"ACCEPTED" if self.tamper else "refused"} stack_free=4556 internal_min=123']
+        if line == 'trust':
+            return [f'I (1) test: trust {self.trusted or "none"}']
+        if line == 'trust none':
+            self.trusted = None
+            return ['I (1) fw: trusted admin none', 'I (1) test: ok trust none']
+        if line.startswith('trust '):
+            k = line.split()[1]
+            if not self.deaf_trust:
+                self.trusted = k
+            return [f'I (1) fw: trusted admin {k[:8]}', f'I (1) test: ok trust {k[:8]}{self.ellipsis}']
+        if line == 'cfg':
+            c = {'color': '#ff0000', 'dev': True, 'peers': []}
+            if not self.legacy:
+                c.update(admin=self.admin, admin_key=self.key if self.admin else None,
+                         trusted=self.trusted[:8] if self.trusted else None)
+            return ['I (1) test: cfg ' + json.dumps(c)]
+        return ['I (1) test: ok']
+
+    def cmd(self, line, expect=None, timeout=15, **kw):
+        self.sent.append(line)
+        at = len(self.data)
+        self.data += ['> ' + line] + self.reply(line)
+        return self._match(line, expect, at)
+
+    def _match(self, line, expect, at):
+        for l in self.data[at:]:
+            if re.search(r'test: error', l):
+                raise Fail(f'{line}: {l}')
+            m = re.search(expect or r'test: ok', l)
+            if m:
+                return m
+        raise Fail(f'{line}: no answer matching {expect}')
+
+    def cfg(self):
+        return json.loads(self.cmd('cfg', r'test: cfg (\{.*\})').group(1))
+
+
+class Admin(unittest.TestCase):
+    """mesh.admin: the console sequence of secure updates, and the board's own pairing put back."""
+
+    def run_admin(self, b):
+        return AppSuites.run_nav(self, app_suites.admin, b)
+
+    def test_passes_and_leaves_the_board_as_it_was(self):
+        b = FakeAdmin()
+        ctx = self.run_admin(b)
+        self.assertEqual([x for x in b.sent if x != 'cfg'],
+                         ['trust', 'admin on', 'admin key', 'admin selftest', 'trust ' + KEY_A, 'trust none',
+                          'admin off', 'trust none', 'admin off'])
+        self.assertEqual((b.admin, b.trusted, b.key), (False, None, KEY_A))   # the key pair stays, as "admin off"
+        self.assertIn('selftest 331 ms', ctx.notes[0])
+
+    def test_puts_back_admin_on_and_the_trusted_key(self):
+        b = FakeAdmin(admin=True, key=KEY_A, trusted=KEY_B)
+        self.run_admin(b)
+        self.assertEqual(b.sent[-2:], ['trust ' + KEY_B, 'admin on'])
+        self.assertEqual((b.admin, b.trusted), (True, KEY_B))
+
+    def test_the_helpers_ascii_ellipsis_passes(self):
+        self.run_admin(FakeAdmin(ellipsis='???'))
+        self.assertTrue(re.search(app_suites.TRUST_OK, 'test: ok trust wmg5gDSU\u2026'))
+        self.assertFalse(re.search(app_suites.TRUST_OK, 'test: ok trust wmg5gD'))
+
+    def test_a_firmware_without_it_fails(self):
+        with self.assertRaises(Fail) as e:
+            self.run_admin(FakeAdmin(legacy=True))
+        self.assertIn('without secure updates', str(e.exception))
+
+    def test_a_selftest_that_accepts_a_changed_message_fails(self):
+        b = FakeAdmin(tamper=True)
+        with self.assertRaises(Fail) as e:
+            self.run_admin(b)
+        self.assertIn('ACCEPTED', str(e.exception))
+        self.assertEqual((b.admin, b.trusted), (False, None))                 # put back even so
+
+    def test_trust_that_does_not_reach_cfg_fails(self):
+        with self.assertRaises(Fail) as e:
+            self.run_admin(FakeAdmin(deaf_trust=True))
+        self.assertIn('cfg says trusted None', str(e.exception))
+
+    def test_key_pattern(self):
+        self.assertEqual(len(KEY_A), 88)
+        self.assertTrue(re.fullmatch(app_suites.ADMIN_KEY, 'test: admin key ' + KEY_A))
+        self.assertFalse(re.fullmatch(app_suites.ADMIN_KEY, 'test: admin key ' + KEY_A[:-4]))
+
+
 class LogWaits(unittest.TestCase):
     def test_ready_line_found_after_start_logs_wait(self):
         # "console ready" lost in the first 2.5 s: start_log's wait stops on the ready line itself and moves the read

@@ -5,6 +5,12 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.4.0-rc.1 - 2026-11-01
+- Secure updates for boards NOT in dev mode: make one board the admin (`admin on`, or the USB card), paste its key
+  into the other boards once (`trust <key>`), then they take new firmware only from that admin, after it proves
+  the image with its key (a fresh challenge, an ECDSA P-256 signature over length, digest and version, and the
+  received bytes checked against the signed digest). Dev mode is unchanged. ADMIN pill on the main screen.
+
 ## v0.3.0 - 2026-11-01
 Third release. Everything in v0.2.0 plus:
 - Choose the wave's second colour: hold a swatch on the colour ring (a dot marks it); hold it again for automatic

@@ -25,9 +25,25 @@
 // transfer after N KB ("probe": the dev peer retries after its 30 s back-off), so link settings can be compared
 // without re-flashing the receiving board.
 //
+//
+// Secure updates (the admin board, fw_auth.h for the byte layouts): a board OUT of dev mode with a trusted admin key
+// (console "trust") pulls only from a peer advertising MP_F_ADMIN, and only a signed image. After the link is up the
+// admin sender asks for a challenge (CTRL 04); the receiver notifies a fresh 32-byte nonce (ACK, sector 0xFFFE,
+// status 3, 36 bytes); the sender answers with CTRL 03, the proof: nonce, image length, image digest, version and an
+// ECDSA P-256 signature (raw r || s) over SHA-256 of those 100 bytes, made with its private key (NVS "adm_priv");
+// the receiver checks the nonce (single use, 10 s), the version (strictly newer), the signature with the trusted key,
+// answers a verdict (ACK, sector 0xFFFE, status 4) and then accepts only the START with the signed length and digest;
+// at the end its own SHA-256 of what it wrote must equal the signed digest. Without a valid proof it refuses
+// ("fw: refused <addr>: no proof | bad signature | ...") and disconnects. Dev-mode boards pull as before, from anyone;
+// a proof is checked when one comes (an admin sender always offers one) but not required. Why the sender asks
+// instead of the receiver pushing the nonce at once: ACK notifications reach the sender without any subscription
+// (ble_gatts_notify_custom ignores the CCCD) through BLE_GAP_EVENT_NOTIFY_RX, filtered on the ACK handle, which the
+// sender only knows after discovery; and a v0.3.0 sender treats any unknown ACK status as an abort, so a dev-mode
+// receiver must never notify a challenge nobody asked for.
+//
 // Threads: the GAP hook and the GATT callbacks run in the NimBLE host task and only copy and post; every NimBLE
-// procedure, flash write, mesh_* call and log line is in the "fw" task (core 0, 5 KB internal stack: fwloop, which
-// runs esp_ota_end, left 732 bytes of 4 KB).
+// procedure, flash write, mesh_* call, ECDSA operation and log line is in the "fw" task (core 0, internal stack,
+// FW_STACK: fwloop, which runs esp_ota_end, left 732 bytes of 4 KB; the ECDSA sign and verify run here too).
 #include "mesh_fw.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -36,6 +52,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -45,12 +62,19 @@
 #include "esp_image_format.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_random.h"
 #include "mbedtls/sha256.h"
+#include "mbedtls/ecp.h"
+#include "mbedtls/ecdsa.h"
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/bignum.h"
+#include "mbedtls/md.h"
 #include "host/ble_hs.h"
 #include "host/ble_esp_gap.h"
 #include "testcon.h"
 #include "board.h"
 #include "config.h"
+#include "fw_auth.h"
 #include "mesh.h"
 #include "mesh_proto.h"
 #include "ui.h"
@@ -78,6 +102,9 @@ static const char *TAG = "fw";
 #define LOG_STEP        (128 * 1024)
 #define POLL_MS         1000
 #define CONFIRM_MS      60000
+#define FW_STACK        6144        // 5 KB before the ECDSA; 8 KB left 3.9 KB after fwloop + selftest + serving (fwinfo, admin selftest: stack_free)
+#define CHAL_MAX        3           // challenges a receiver issues per link
+#define VERDICT_MS      5000        // sender: waiting for the receiver's verdict on the proof
 
 // MESH_PEER_HAS_TARGET: mesh.h's mesh_peer_t carries the peer's advertised target origin (see the report: agent A4
 // adds `uint8_t target;` + `o->target = p->st.target;` in mesh_peers()). Without it a sender serves a dev peer older
@@ -93,13 +120,16 @@ static const ble_uuid128_t ack_uuid = CM_UUID(0x04);
 static uint16_t ack_handle;
 
 // ---- events to the fw task: type << 24 | argument ----
-enum { E_TARGET = 1, E_PCONN, E_PDISC, E_START, E_SECTOR, E_NACK, E_RXERR, E_INFO, E_LOOP, E_CONFIRM, E_LINK, E_TUNE };
+enum { E_TARGET = 1, E_PCONN, E_PDISC, E_START, E_SECTOR, E_NACK, E_RXERR, E_INFO, E_LOOP, E_CONFIRM, E_LINK, E_TUNE,
+       E_CHAL, E_PROOF, E_ADMIN, E_TRUST };
 // E_LINK argument: kind << 20 | 20 bits of payload (receiver side: what the link granted, logged by the fw task)
 enum { LK_PHY = 1, LK_DLE, LK_UPD, LK_MTU };
 #define EV(t, a) (((uint32_t)(t) << 24) | ((uint32_t)(a) & 0xFFFFFF))
-enum { RXE_ABORT = 1, RXE_NOT_NEWER, RXE_BUSY };
+enum { RXE_ABORT = 1, RXE_NOT_NEWER, RXE_BUSY, RXE_NO_PROOF, RXE_UNSIGNED_START };
 static const char *const rxe_text[] = { "", "the sender aborted", "offered version is not newer",
-                                        "ring slot still busy (sender ignored the window)" };
+                                        "ring slot still busy (sender ignored the window)", "no proof",
+                                        "START does not match the signed image" };
+#define RXE_N ((int)(sizeof(rxe_text) / sizeof(rxe_text[0])))
 
 // sender link bits (host task -> fw task)
 #define B_CONN      BIT0
@@ -111,7 +141,9 @@ static const char *const rxe_text[] = { "", "the sender aborted", "offered versi
 #define B_GATT      BIT6
 #define B_ACK       BIT7
 #define B_UPD       BIT8
-#define B_ALL       0x1FF
+#define B_CHAL      BIT9            // a challenge arrived (tx.nonce)
+#define B_VERDICT   BIT10           // the receiver's verdict on the proof (tx.verdict)
+#define B_ALL       0x7FF
 
 static QueueHandle_t evq;           // GAP hook, CTRL, console, timer -> fw task
 static QueueHandle_t secq;          // DATA (sector full / CRC error / protocol error) -> fw task
@@ -161,7 +193,18 @@ static struct {
     uint32_t write_us_max;
     char version[32];
     bool done_ok;
+    // secure updates
+    bool signed_pull;               // chosen by the secure rule (out of dev mode, from an admin peer)
+    volatile bool need_proof;       // out of dev mode at connect: START needs a verified proof first
+    volatile bool proof_ok;         // the proof was verified: START must carry its length and digest (host task reads)
+    fwa_proof_t proof;              // the signed values, written by the fw task before proof_ok
+    fwa_nonce_t nonce;              // the live challenge (fw task)
+    uint8_t chals;                  // challenges issued on this link
+    mbedtls_sha256_context sha;     // the receiver's own digest of the bytes written (signed pulls)
+    bool sha_on;
 } rx = { .conn = BLE_HS_CONN_HANDLE_NONE };
+EXT_RAM_BSS_ATTR static uint8_t proof_in[FWA_PROOF_LEN];   // CTRL 03 as written (host task -> fw task)
+static volatile bool proof_busy;
 static uint8_t *ring;               // RING * SECTOR in PSRAM, allocated on the first pull, kept
 static uint8_t rxbuf[PKT_MAX + 4];  // host task only
 static uint8_t pconn_addr[6];       // the central of the last peripheral connection (host task -> fw task)
@@ -182,6 +225,8 @@ static struct {
     uint32_t enomem, resent, enomem_ms, wait_ms;       // back-offs, and time spent waiting for the window to open
     int64_t t_stream_us;
     bool probed;                                      // the stream stopped at tune.probe_kb
+    uint8_t nonce[FWA_NONCE_LEN];                     // the receiver's challenge (host task -> fw task)
+    volatile int verdict;                             // the receiver's verdict on our proof (FWA_V_*)
 } tx = { .conn = BLE_HS_CONN_HANDLE_NONE };
 
 // fwtune knobs (RAM; the defaults are the release's behaviour). Read by the fw task at the start of a transfer.
@@ -254,6 +299,177 @@ static bool ensure_ring(void)
 }
 
 // ======================================================================================================
+// ECDSA P-256 (fw task only): key pair, sign, verify. mbedTLS; randomness from esp_fill_random through a CTR-DRBG
+// seeded by esp_fill_random. Private keys live in a stack buffer or an mbedtls_mpi only while used, then zeroed
+// (mbedtls_mpi_free zeroes the limbs).
+// ======================================================================================================
+
+EXT_RAM_BSS_ATTR static mbedtls_ctr_drbg_context drbg;   // PSRAM: internal RAM is the scarce kind (L185)
+static bool drbg_ok;
+
+static int entropy_cb(void *ctx, unsigned char *out, size_t n)
+{
+    esp_fill_random(out, n);
+    return 0;
+}
+
+static int rng(void *ctx, unsigned char *out, size_t n) { return mbedtls_ctr_drbg_random(&drbg, out, n); }
+
+static bool drbg_ready(void)
+{
+    if (drbg_ok) return true;
+    static const char pers[] = "colormesh fw admin";
+    mbedtls_ctr_drbg_init(&drbg);
+    int rc = mbedtls_ctr_drbg_seed(&drbg, entropy_cb, NULL, (const unsigned char *)pers, sizeof(pers) - 1);
+    if (rc) { ESP_LOGW(TAG, "drbg seed rc=-0x%04x", -rc); mbedtls_ctr_drbg_free(&drbg); return false; }
+    drbg_ok = true;
+    return true;
+}
+
+// A new key pair: priv (32 bytes, big-endian), pub (X || Y). 0 on success
+static int ec_keygen(uint8_t priv[FWA_PRIV_LEN], uint8_t pub[FWA_PUB_LEN])
+{
+    if (!drbg_ready()) return -1;
+    mbedtls_ecp_keypair kp;
+    mbedtls_ecp_group grp;
+    mbedtls_mpi d;
+    mbedtls_ecp_point q;
+    mbedtls_ecp_keypair_init(&kp);
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_mpi_init(&d);
+    mbedtls_ecp_point_init(&q);
+    uint8_t buf[1 + FWA_PUB_LEN];
+    size_t olen = 0;
+    int rc = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, &kp, rng, NULL);
+    if (!rc) rc = mbedtls_ecp_export(&kp, &grp, &d, &q);
+    if (!rc) rc = mbedtls_mpi_write_binary(&d, priv, FWA_PRIV_LEN);
+    if (!rc) rc = mbedtls_ecp_point_write_binary(&grp, &q, MBEDTLS_ECP_PF_UNCOMPRESSED, &olen, buf, sizeof(buf));
+    if (!rc && (olen != sizeof(buf) || buf[0] != 0x04)) rc = -1;
+    if (!rc) memcpy(pub, buf + 1, FWA_PUB_LEN);
+    mbedtls_ecp_point_free(&q);
+    mbedtls_mpi_free(&d);
+    mbedtls_ecp_group_free(&grp);
+    mbedtls_ecp_keypair_free(&kp);
+    if (rc) fwa_zero(priv, FWA_PRIV_LEN);
+    return rc;
+}
+
+static int ec_load_pub(mbedtls_ecp_group *grp, mbedtls_ecp_point *q, const uint8_t pub[FWA_PUB_LEN])
+{
+    uint8_t buf[1 + FWA_PUB_LEN];
+    buf[0] = 0x04;
+    memcpy(buf + 1, pub, FWA_PUB_LEN);
+    int rc = mbedtls_ecp_group_load(grp, MBEDTLS_ECP_DP_SECP256R1);
+    if (!rc) rc = mbedtls_ecp_point_read_binary(grp, q, buf, sizeof(buf));
+    if (!rc) rc = mbedtls_ecp_check_pubkey(grp, q);
+    return rc;
+}
+
+// A point on P-256 (the "trust" check)
+static bool ec_pub_valid(const uint8_t pub[FWA_PUB_LEN])
+{
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point q;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&q);
+    int rc = ec_load_pub(&grp, &q, pub);
+    mbedtls_ecp_point_free(&q);
+    mbedtls_ecp_group_free(&grp);
+    return rc == 0;
+}
+
+// sig = r || s over hash with the stored private key (deterministic ECDSA, RFC 6979, SHA-256). 0 on success
+static int ec_sign(const uint8_t hash[32], uint8_t sig[FWA_SIG_LEN])
+{
+    uint8_t priv[FWA_PRIV_LEN];
+    if (!config_admin_priv(priv)) return -1;
+    if (!drbg_ready()) { fwa_zero(priv, sizeof(priv)); return -1; }
+    mbedtls_ecp_group grp;
+    mbedtls_mpi d, r, s;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_mpi_init(&d);
+    mbedtls_mpi_init(&r);
+    mbedtls_mpi_init(&s);
+    int rc = mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
+    if (!rc) rc = mbedtls_mpi_read_binary(&d, priv, sizeof(priv));
+    fwa_zero(priv, sizeof(priv));
+    if (!rc) rc = mbedtls_ecdsa_sign_det_ext(&grp, &r, &s, &d, hash, 32, MBEDTLS_MD_SHA256, rng, NULL);
+    if (!rc) rc = mbedtls_mpi_write_binary(&r, sig, 32);
+    if (!rc) rc = mbedtls_mpi_write_binary(&s, sig + 32, 32);
+    mbedtls_mpi_free(&s);
+    mbedtls_mpi_free(&r);
+    mbedtls_mpi_free(&d);
+    mbedtls_ecp_group_free(&grp);
+    return rc;
+}
+
+// 0 when sig (r || s) is a valid signature of hash by pub
+static int ec_verify(const uint8_t pub[FWA_PUB_LEN], const uint8_t hash[32], const uint8_t sig[FWA_SIG_LEN])
+{
+    mbedtls_ecp_group grp;
+    mbedtls_ecp_point q;
+    mbedtls_mpi r, s;
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_point_init(&q);
+    mbedtls_mpi_init(&r);
+    mbedtls_mpi_init(&s);
+    int rc = ec_load_pub(&grp, &q, pub);
+    if (!rc) rc = mbedtls_mpi_read_binary(&r, sig, 32);
+    if (!rc) rc = mbedtls_mpi_read_binary(&s, sig + 32, 32);
+    if (!rc) rc = mbedtls_ecdsa_verify(&grp, hash, 32, &q, &r, &s);
+    mbedtls_mpi_free(&s);
+    mbedtls_mpi_free(&r);
+    mbedtls_ecp_point_free(&q);
+    mbedtls_ecp_group_free(&grp);
+    return rc;
+}
+
+static void proof_hash(const fwa_proof_t *p, uint8_t hash[32])
+{
+    uint8_t m[FWA_MSG_LEN];
+    fwa_proof_message(m, p);
+    mbedtls_sha256(m, sizeof(m), hash, 0);
+}
+
+static uint32_t ms_since(int64_t t0_us) { return (uint32_t)((esp_timer_get_time() - t0_us) / 1000); }
+
+// The sender's proof for a challenge: this board's image, version and signature. 0 on success; sign_ms how long
+static int proof_make(fwa_proof_t *p, const uint8_t nonce[FWA_NONCE_LEN], uint32_t *sign_ms)
+{
+    memset(p, 0, sizeof(*p));
+    memcpy(p->nonce, nonce, FWA_NONCE_LEN);
+    p->image_len = run_len;
+    memcpy(p->digest, run_digest, FWA_DIGEST_LEN);
+    strlcpy(p->version, esp_app_get_description()->version, sizeof(p->version));
+    uint8_t h[32];
+    proof_hash(p, h);
+    int64_t t0 = esp_timer_get_time();
+    int rc = ec_sign(h, p->sig);
+    if (sign_ms) *sign_ms = ms_since(t0);
+    return rc;
+}
+
+// The receiver's judgement of a proof: nonce (taken), version (strictly newer than own), signature with key (NULL:
+// none trusted). FWA_V_* ; *why for the log; verify_ms how long the ECDSA verify took
+static uint8_t proof_judge(const fwa_proof_t *p, const uint8_t own[4], const uint8_t *key, const char **why,
+                           uint32_t *verify_ms)
+{
+    if (verify_ms) *verify_ms = 0;
+    fwa_result_t r = fwa_check(&rx.nonce, p, own, now_ms());
+    if (r != FWA_OK) { *why = fwa_result_text(r); return fwa_result_verdict(r); }
+    if (!key) { *why = "no trusted key"; return FWA_V_UNCHECKED; }
+    uint8_t h[32];
+    proof_hash(p, h);
+    int64_t t0 = esp_timer_get_time();
+    int rc = ec_verify(key, h, p->sig);
+    if (verify_ms) *verify_ms = ms_since(t0);
+    *why = rc ? "bad signature" : "ok";
+    return rc ? FWA_V_BAD_SIG : FWA_V_OK;
+}
+
+static void short_of(const uint8_t pub[FWA_PUB_LEN], char out[FWA_SHORT_LEN + 1]) { fwa_short_id(pub, out); }
+
+// ======================================================================================================
 // Receiver: packets (host task, or the fw task in fwloop)
 // ======================================================================================================
 
@@ -306,7 +522,7 @@ static void rx_packet(const uint8_t *p, int len)
 static int ctrl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
-    uint8_t b[START_LEN];
+    uint8_t b[FWA_PROOF_LEN];                         // the longest command (START is 41 bytes)
     uint16_t n = 0;
     if (ble_hs_mbuf_to_flat(ctxt->om, b, sizeof(b), &n) != 0 || n < 1) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     if (rx.state != R_LINKED || conn != rx.conn) return BLE_ATT_ERR_UNLIKELY;
@@ -315,9 +531,30 @@ static int ctrl_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt
         post(evq, EV(E_RXERR, RXE_ABORT));
         return 0;
     }
+    if (b[0] == FWA_CTRL_CHALLENGE) {                 // an admin sender asks for a nonce (the fw task notifies it)
+        if (n != 1 || rx.active) return BLE_ATT_ERR_UNLIKELY;
+        post(evq, EV(E_CHAL, 0));
+        return 0;
+    }
+    if (b[0] == FWA_CTRL_PROOF) {                     // judged by the fw task, which notifies the verdict
+        if (n != FWA_PROOF_LEN) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (rx.active || proof_busy) return BLE_ATT_ERR_UNLIKELY;
+        memcpy(proof_in, b, FWA_PROOF_LEN);
+        proof_busy = true;
+        post(evq, EV(E_PROOF, 0));
+        return 0;
+    }
     if (b[0] != CTRL_START || n != START_LEN) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     uint32_t len = b[1] | (uint32_t)b[2] << 8 | (uint32_t)b[3] << 16 | (uint32_t)b[4] << 24;
     if (rx.active || !ring || !rx.part || len < SECTOR || len > rx.part->size) return BLE_ATT_ERR_UNLIKELY;
+    if (rx.need_proof && !rx.proof_ok) {              // out of dev mode: no START without a verified proof
+        post(evq, EV(E_RXERR, RXE_NO_PROOF));
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    if (rx.proof_ok && !fwa_start_matches(&rx.proof, len, b + 5)) {
+        post(evq, EV(E_RXERR, RXE_UNSIGNED_START));
+        return BLE_ATT_ERR_UNLIKELY;
+    }
     if (!rx.forced && mp_ver_cmp(b + 37, own_ver) <= 0) {
         post(evq, EV(E_RXERR, RXE_NOT_NEWER));
         return BLE_ATT_ERR_UNLIKELY;
@@ -414,17 +651,32 @@ static void rx_on_link(uint32_t a)
 
 static void tx_on_ack(uint32_t idx, uint8_t st);
 
-static int send_ack(uint16_t idx, uint8_t st)
+static int notify_ack(const uint8_t *b, int len)
 {
-    if (rx.loop) { tx_on_ack(idx, st); return 0; }
-    uint8_t b[ACK_LEN] = { (uint8_t)idx, (uint8_t)(idx >> 8), st };
     for (int i = 0; i < 200; i++) {
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(b, sizeof(b));
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(b, len);
         int rc = om ? ble_gatts_notify_custom(rx.conn, ack_handle, om) : BLE_HS_ENOMEM;   // frees om
         if (rc != BLE_HS_ENOMEM) return rc;
         vTaskDelay(pdMS_TO_TICKS(5));
     }
     return BLE_HS_ENOMEM;
+}
+
+static int send_ack(uint16_t idx, uint8_t st)
+{
+    if (rx.loop) { tx_on_ack(idx, st); return 0; }
+    uint8_t b[ACK_LEN] = { (uint8_t)idx, (uint8_t)(idx >> 8), st };
+    return notify_ack(b, sizeof(b));
+}
+
+static void rx_auth_reset(void)
+{
+    rx.proof_ok = false;
+    rx.need_proof = false;
+    rx.chals = 0;
+    fwa_nonce_clear(&rx.nonce);
+    fwa_zero(&rx.proof, sizeof(rx.proof));
+    if (rx.sha_on) { mbedtls_sha256_free(&rx.sha); rx.sha_on = false; }
 }
 
 // Ends a pull (any state): radio back to normal; with backoff, the next automatic pull waits 30 s
@@ -447,18 +699,30 @@ static void rx_stop(bool backoff)
     rx.conn = BLE_HS_CONN_HANDLE_NONE;
     rx.state = R_IDLE;
     rx.loop = false;
+    rx.signed_pull = false;
+    rx_auth_reset();
     progress = -1;
     if (backoff) backoff_until = now_ms() + BACKOFF_MS;
 }
 
+// A refusal (no proof, bad signature, ...): "fw: refused <addr>: <why>", the link closed, 30 s before the next try
+static void rx_refuse(const char *why)
+{
+    char a[18];
+    fmt_addr(a, sizeof(a), rx.peer_addr);
+    ESP_LOGW(TAG, "refused %s: %s", a, why);
+    rx_stop(true);
+}
+
+static char last_fail[80];           // the last rx_fail reason (fwloop reports it)
+
 static void rx_fail(const char *fmt, ...)
 {
-    char why[80];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(why, sizeof(why), fmt, ap);
+    vsnprintf(last_fail, sizeof(last_fail), fmt, ap);
     va_end(ap);
-    ESP_LOGW(TAG, "failed: %s", why);
+    ESP_LOGW(TAG, "failed: %s", last_fail);
     rx_stop(true);
 }
 
@@ -475,6 +739,8 @@ static const char *rx_check_header(const uint8_t *s, uint32_t n)
         return "another project";
     memcpy(rx.version, d.version, sizeof(rx.version));
     rx.version[sizeof(rx.version) - 1] = 0;
+    if (rx.proof_ok && strncmp(rx.version, rx.proof.version, sizeof(rx.version)))
+        return "image version is not the signed one";
     if (rx.forced) return NULL;
     uint8_t v[4];
     mp_ver_from_string(rx.version, v);
@@ -485,6 +751,12 @@ static const char *rx_check_header(const uint8_t *s, uint32_t n)
 
 static void rx_finish(void)
 {
+    if (rx.proof_ok) {                                // signed: what was written must be what the admin signed
+        uint8_t h[32];
+        bool ok = rx.sha_on && mbedtls_sha256_finish(&rx.sha, h) == 0 && fwa_ct_equal(h, rx.proof.digest, 32);
+        if (rx.sha_on) { mbedtls_sha256_free(&rx.sha); rx.sha_on = false; }
+        if (!ok) { rx_fail("digest mismatch"); return; }   // rx_stop: esp_ota_abort, 30 s back-off
+    }
     esp_err_t err = esp_ota_end(rx.h);                // magic, segments, checksum, appended SHA-256
     rx.begun = false;
     if (err != ESP_OK) { rx_fail("verify: %s", esp_err_to_name(err)); return; }
@@ -503,8 +775,8 @@ static void rx_finish(void)
     if (err != ESP_OK) { rx_fail("set boot: %s", esp_err_to_name(err)); return; }
     progress = 100;
     send_ack(ACK_DONE, ST_OK);
-    ESP_LOGI(TAG, "pulled %s from %s in %s s (%s KB/s, %lu resent), restarting", rx.version, a, s, r,
-             (unsigned long)rx.nacks);
+    ESP_LOGI(TAG, "pulled %s from %s in %s s (%s KB/s, %lu resent%s), restarting", rx.version, a, s, r,
+             (unsigned long)rx.nacks, rx.proof_ok ? ", signed, digest ok" : "");
     vTaskDelay(pdMS_TO_TICKS(300));                   // let the final ACK go out
     ble_gap_terminate(rx.conn, BLE_ERR_REM_USER_CONN_TERM);
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -523,6 +795,15 @@ static void rx_write_sector(uint32_t idx)
         esp_err_t err = esp_ota_begin(rx.part, OTA_WITH_SEQUENTIAL_WRITES, &rx.h);
         if (err != ESP_OK) { rx_fail("ota_begin: %s", esp_err_to_name(err)); return; }
         rx.begun = true;
+        if (rx.proof_ok) {                            // the image digest covers all but its last 32 bytes
+            if (rx.sha_on) mbedtls_sha256_free(&rx.sha);
+            mbedtls_sha256_init(&rx.sha);
+            rx.sha_on = mbedtls_sha256_starts(&rx.sha, 0) == 0;
+        }
+    }
+    if (rx.sha_on) {
+        uint32_t o = idx * SECTOR, hl = rx.len - FWA_DIGEST_LEN;
+        if (o < hl) mbedtls_sha256_update(&rx.sha, s, n < hl - o ? n : hl - o);
     }
     int64_t t = esp_timer_get_time();
     esp_err_t err = esp_ota_write(rx.h, s, n);
@@ -547,7 +828,7 @@ static void rx_on_sector_event(uint32_t e)
     switch (e >> 24) {
     case E_SECTOR: rx_write_sector(a); break;
     case E_NACK: send_ack((uint16_t)a, ST_CRC); break;
-    case E_RXERR: if (rx.state != R_IDLE) rx_fail("%s", rxe_text[a < 4 ? a : 0]); break;
+    case E_RXERR: if (rx.state != R_IDLE) rx_fail("%s", rxe_text[a < RXE_N ? a : 0]); break;
     }
 }
 
@@ -555,9 +836,11 @@ static void rx_on_sector_event(uint32_t e)
 static void rx_poll(int n)
 {
     uint32_t now = now_ms();
-    bool dev = config_get()->dev_mode;
+    const app_cfg_t *c = config_get();
+    bool dev = c->dev_mode;
+    bool secure = !dev && c->has_trusted;             // out of dev mode: signed pulls from an admin peer only
     if (rx.state == R_WANT) {
-        if (!dev) { ESP_LOGI(TAG, "pull stopped: dev mode off"); rx_stop(false); return; }
+        if (!dev && !(secure && rx.signed_pull)) { ESP_LOGI(TAG, "pull stopped: dev mode off"); rx_stop(false); return; }
         if (now - rx.want_ms > WANT_MS) {
             char a[18];
             fmt_addr(a, sizeof(a), rx.peer_addr);
@@ -571,7 +854,7 @@ static void rx_poll(int n)
     }
     if (rx.state != R_IDLE) return;
     uint8_t f = forced;
-    if (!dev) {
+    if (!dev && (f != MP_TARGET_NONE || !secure)) {   // fwpull (unsigned, any peer) is a dev-mode tool
         if (f != MP_TARGET_NONE && !noted_devmode) { ESP_LOGI(TAG, "fwpull %02x waits for dev mode", f); noted_devmode = true; }
         return;
     }
@@ -588,6 +871,7 @@ static void rx_poll(int n)
         for (int i = 0; i < n; i++) {
             const mesh_peer_t *p = &peers[i];
             if (!p->servable || mp_ver_cmp(p->ver, own_ver) <= 0) continue;
+            if (!dev && !p->admin) continue;          // out of dev mode: only an admin can serve (signed)
             if (bad_version[0] && !memcmp(p->ver, bad_ver, 4)) continue;
             int c = best ? mp_ver_cmp(p->ver, best->ver) : 1;
             if (c > 0 || (c == 0 && addr_lt(p->addr, best->addr))) best = p;
@@ -602,12 +886,13 @@ static void rx_poll(int n)
     rx.target = best->origin;
     memcpy(rx.peer_addr, best->addr, 6);
     rx.forced = f != MP_TARGET_NONE;
+    rx.signed_pull = !dev;
     rx.loop = false;
     rx.want_ms = now;
     rx.state = R_WANT;
     mesh_set_target(best->origin);
     mesh_set_connectable(true);
-    ESP_LOGI(TAG, "want %s from %s%s", v, a, rx.forced ? " (fwpull)" : "");
+    ESP_LOGI(TAG, "want %s from %s%s", v, a, rx.forced ? " (fwpull)" : rx.signed_pull ? " (signed, admin)" : "");
 }
 
 static void rx_on_connect(uint16_t conn)
@@ -623,6 +908,8 @@ static void rx_on_connect(uint16_t conn)
     mesh_set_connectable(false);
     if (!tune.rxscan) mesh_scan_pause(true);          // the radio is the link's until the pull ends
     memcpy(rx.peer_addr, pconn_addr, 6);
+    rx_auth_reset();
+    rx.need_proof = !config_get()->dev_mode;          // out of dev mode: START only after a verified proof
     rx.conn = conn;
     rx.active = false;
     rx.next_write = 0;
@@ -631,7 +918,66 @@ static void rx_on_connect(uint16_t conn)
     rx.last_ms = now_ms();
     rx.state = R_LINKED;
     progress = 0;
-    ESP_LOGI(TAG, "linked to %s", a);
+    ESP_LOGI(TAG, "linked to %s%s", a, rx.need_proof ? " (a signed image is required)" : "");
+}
+
+// CTRL 04: a fresh nonce, notified as the 36-byte challenge (the sender signs it into its proof)
+static void rx_on_challenge_request(void)
+{
+    if (rx.state != R_LINKED || rx.active) return;
+    if (rx.chals >= CHAL_MAX) { ESP_LOGW(TAG, "challenge refused: %d already on this link", CHAL_MAX); return; }
+    rx.chals++;
+    uint8_t n[FWA_NONCE_LEN], b[FWA_CHAL_LEN];
+    esp_fill_random(n, sizeof(n));
+    fwa_nonce_issue(&rx.nonce, n, now_ms());
+    fwa_challenge_encode(b, n);
+    int rc = notify_ack(b, sizeof(b));
+    fwa_zero(n, sizeof(n));
+    fwa_zero(b, sizeof(b));
+    if (rc) { ESP_LOGW(TAG, "challenge notify rc=%d", rc); return; }
+    ESP_LOGI(TAG, "challenge sent");
+}
+
+static void rx_send_verdict(uint8_t v)
+{
+    uint8_t b[FWA_VERDICT_LEN];
+    fwa_verdict_encode(b, v);
+    notify_ack(b, sizeof(b));
+}
+
+// CTRL 03: the proof. Out of dev mode anything but a good proof ends the link (30 s back-off); in dev mode a proof
+// that does not check out is set aside and the pull goes on unsigned, as every dev-mode pull did before
+static void rx_on_proof(void)
+{
+    fwa_proof_t p;
+    bool parsed = fwa_proof_decode(proof_in, FWA_PROOF_LEN, &p);
+    fwa_zero(proof_in, sizeof(proof_in));
+    proof_busy = false;
+    if (rx.state != R_LINKED || rx.active) return;
+    char a[18];
+    fmt_addr(a, sizeof(a), rx.peer_addr);
+    const app_cfg_t *c = config_get();
+    const char *why = "malformed proof";
+    uint32_t vms = 0;
+    uint8_t v = parsed ? proof_judge(&p, own_ver, c->has_trusted ? c->trusted : NULL, &why, &vms) : FWA_V_BAD_PROOF;
+    if (v == FWA_V_OK) {
+        rx.proof = p;                                 // before proof_ok: the host task reads it once proof_ok is set
+        rx.proof_ok = true;
+        char k[FWA_SHORT_LEN + 1];
+        short_of(c->trusted, k);
+        ESP_LOGI(TAG, "proof ok from %s (key %s, %s, %lu bytes, verify %lu ms)", a, k, p.version,
+                 (unsigned long)p.image_len, (unsigned long)vms);
+        rx_send_verdict(FWA_V_OK);
+        return;
+    }
+    if (rx.need_proof) {
+        rx_send_verdict(v);
+        rx_refuse(why);                               // "fw: refused <addr>: bad signature" (or nonce, version...)
+        return;
+    }
+    if (v == FWA_V_UNCHECKED) ESP_LOGI(TAG, "proof from %s not checked: %s (dev mode: the pull goes on unsigned)", a, why);
+    else ESP_LOGW(TAG, "proof from %s not used: %s (dev mode: the pull goes on unsigned)", a, why);
+    rx_send_verdict(FWA_V_UNCHECKED);
 }
 
 // ======================================================================================================
@@ -679,9 +1025,19 @@ static int tx_gap_cb(struct ble_gap_event *e, void *arg)      // host task
         break;
     case BLE_GAP_EVENT_NOTIFY_RX:
         if (e->notify_rx.attr_handle == tx.h_ack && OS_MBUF_PKTLEN(e->notify_rx.om) >= 3) {
-            uint8_t b[3];
-            os_mbuf_copydata(e->notify_rx.om, 0, 3, b);
-            tx_on_ack(b[0] | (uint32_t)b[1] << 8, b[2]);
+            uint8_t b[FWA_CHAL_LEN];
+            uint16_t k = OS_MBUF_PKTLEN(e->notify_rx.om);
+            if (k > sizeof(b)) k = sizeof(b);
+            os_mbuf_copydata(e->notify_rx.om, 0, k, b);
+            uint32_t idx = b[0] | (uint32_t)b[1] << 8;
+            if (idx == FWA_SECTOR_AUTH) {             // the challenge or the verdict, never a sector ACK
+                int v;
+                if (fwa_challenge_decode(b, k, tx.nonce)) xEventGroupSetBits(eg, B_CHAL);
+                else if ((v = fwa_verdict_decode(b, k)) >= 0) { tx.verdict = v; xEventGroupSetBits(eg, B_VERDICT); }
+                fwa_zero(b, sizeof(b));
+            } else {
+                tx_on_ack(idx, b[2]);
+            }
         }
         break;
     default:
@@ -839,6 +1195,62 @@ static EventBits_t wait_bits(EventBits_t want, bool all, int ms)
     return xEventGroupWaitBits(eg, want | B_DISC, pdFALSE, all ? pdTRUE : pdFALSE, pdMS_TO_TICKS(ms));
 }
 
+static const char *const verdict_text[] = { "ok", "bad signature", "nonce refused", "version not newer",
+                                            "malformed proof", "not checked" };
+
+// An admin sender's proof, before START: ask for a challenge, sign it, wait for the verdict. NULL to go on with
+// START (signed, or unsigned when the receiver is older or in dev mode without a trusted key); else why to stop.
+static const char *tx_prove(uint16_t c, const char *a)
+{
+    const app_cfg_t *cf = config_get();
+    if (!cf->admin || !cf->has_admin_key) return NULL;     // not the admin: START unsigned (a non-dev board refuses it)
+    if (!run_hashed) { ESP_LOGW(TAG, "no proof for %s: the image has no appended SHA-256", a); return NULL; }
+    xEventGroupClearBits(eg, B_CHAL | B_VERDICT | B_GATT);
+    tx.verdict = -1;
+    uint8_t q = FWA_CTRL_CHALLENGE;
+    if (ble_gattc_write_flat(c, tx.h_ctrl, &q, 1, write_cb, NULL)) return "challenge request write";
+    EventBits_t b = wait_bits(B_GATT, false, 5000);
+    if (b & B_DISC) return "link lost";
+    if (!(b & B_GATT)) return "no answer to the challenge request";
+    if (tx.gatt_status) {                             // a v0.3.0 receiver: CTRL knows START and ABORT only
+        ESP_LOGI(TAG, "%s takes no proof (older firmware): START unsigned", a);
+        return NULL;
+    }
+    b = wait_bits(B_CHAL, false, 3000);
+    if (b & B_DISC) return "link lost";
+    if (!(b & B_CHAL)) return "no challenge";
+    fwa_proof_t p;
+    uint32_t sign_ms = 0;
+    int rc = proof_make(&p, tx.nonce, &sign_ms);
+    fwa_zero(tx.nonce, sizeof(tx.nonce));
+    if (rc) { static char why[40]; snprintf(why, sizeof(why), "signing failed (-0x%04x)", -rc); return why; }
+    uint8_t buf[FWA_PROOF_LEN];
+    fwa_proof_encode(buf, &p);
+    xEventGroupClearBits(eg, B_GATT);
+    rc = ble_gattc_write_flat(c, tx.h_ctrl, buf, sizeof(buf), write_cb, NULL);
+    fwa_zero(buf, sizeof(buf));
+    if (rc) return "proof write";
+    b = wait_bits(B_GATT, false, 5000);
+    if (b & B_DISC) return "link lost";
+    if (!(b & B_GATT) || tx.gatt_status) return "proof not taken";
+    b = wait_bits(B_VERDICT, false, VERDICT_MS);
+    if (!(b & B_VERDICT)) return b & B_DISC ? "link lost" : "no verdict on the proof";
+    int v = tx.verdict;
+    char k[FWA_SHORT_LEN + 1];
+    short_of(cf->admin_pub, k);
+    if (v == FWA_V_OK) {
+        ESP_LOGI(TAG, "proof sent to %s: accepted (key %s, sign %lu ms)", a, k, (unsigned long)sign_ms);
+        return NULL;
+    }
+    if (v == FWA_V_UNCHECKED) {
+        ESP_LOGI(TAG, "proof sent to %s: not checked there (dev mode): START unsigned", a);
+        return NULL;
+    }
+    static char why[48];
+    snprintf(why, sizeof(why), "proof refused: %s", v >= 0 && v < 6 ? verdict_text[v] : "?");
+    return why;
+}
+
 // Connected as central: link settings, discovery, START, the stream, the final ACK. NULL on success.
 static const char *tx_session(const uint8_t *img)
 {
@@ -903,6 +1315,11 @@ static const char *tx_session(const uint8_t *img)
     xEventGroupClearBits(eg, B_GATT);
     if (ble_gattc_disc_all_chrs(c, tx.svc_start, tx.svc_end, chr_cb, NULL)) return "characteristic discovery";
     if (!(wait_bits(B_GATT, false, 5000) & B_GATT) || tx.gatt_status) return "characteristics missing";
+    char a[18];
+    if (ble_gap_conn_find(c, &d) == 0) fmt_addr(a, sizeof(a), d.peer_id_addr.val);
+    else strlcpy(a, "?", sizeof(a));
+    const char *pw = tx_prove(c, a);
+    if (pw) return pw;
 
     uint8_t st[START_LEN];
     st[0] = CTRL_START;
@@ -1036,6 +1453,7 @@ static void tx_poll(int n)
     uint32_t now = now_ms();
     if ((int32_t)(now - next_serve_ms) < 0) return;
     uint8_t me = mesh_own_origin();
+    bool admin = config_get()->admin && config_get()->has_admin_key;
 #ifndef MESH_PEER_HAS_TARGET
     uint8_t own[6] = { 0 };
     unsigned v[6];
@@ -1044,7 +1462,7 @@ static void tx_poll(int n)
 #endif
     for (int i = 0; i < n; i++) {
         const mesh_peer_t *p = &peers[i];
-        if (!p->dev) continue;
+        if (!p->dev && !admin) continue;              // a peer out of dev mode wants a signed image: the admin's
 #ifdef MESH_PEER_HAS_TARGET
         if (p->target != me) continue;                // the receiver decides (version checks included)
 #else
@@ -1092,8 +1510,13 @@ static void do_info(void)
 }
 
 // fwloop: this board's sender output fed straight into its receiver (packets, CRC, one injected CRC error, the
-// first-sector check, esp_ota_begin/write/end) into the other slot. The boot slot is not changed.
-static void do_loop(void)
+// first-sector check, esp_ota_begin/write/end) into the other slot. The boot slot is not changed. With an admin key
+// stored, the signed path too: a nonce, this board's proof (signed with its private key, checked with its own public
+// key: any version counts as newer here), the START check, the streamed digest at the end. mode 1 ("baddigest")
+// changes the signed digest after the START check, so only the final digest compare can catch it ("fw: failed:
+// digest mismatch"); mode 2 ("badsig") flips a signature bit ("fw: refused self: bad signature").
+enum { LOOP_PLAIN, LOOP_BAD_DIGEST, LOOP_BAD_SIG };
+static void do_loop(uint32_t mode)
 {
     if (rx.state != R_IDLE) { ESP_LOGW("test", "error fwloop: busy"); return; }
     rx.part = esp_ota_get_next_update_partition(NULL);
@@ -1119,6 +1542,40 @@ static void do_loop(void)
     rx.next_write = rx.logged = rx.write_us_max = 0;
     rx.done_ok = false;
     for (int i = 0; i < RING; i++) rx.slot_full[i] = false;
+    rx_auth_reset();
+    last_fail[0] = 0;
+    const char *auth = "none";
+    uint32_t sign_ms = 0, verify_ms = 0;
+    const app_cfg_t *c = config_get();
+    if (c->has_admin_key && run_hashed) {
+        static const uint8_t any_ver[4] = { 0, 0, 0, 0 };   // the own version: newer than 0.0.0, as fwpull skips it
+        uint8_t n[FWA_NONCE_LEN];
+        esp_fill_random(n, sizeof(n));
+        fwa_nonce_issue(&rx.nonce, n, now_ms());
+        fwa_proof_t p;
+        int rc = proof_make(&p, n, &sign_ms);
+        fwa_zero(n, sizeof(n));
+        const char *jw = "signing failed";
+        uint8_t v = FWA_V_BAD_PROOF;
+        if (!rc) {
+            if (mode == LOOP_BAD_SIG) p.sig[40] ^= 0x01;
+            v = proof_judge(&p, any_ver, c->admin_pub, &jw, &verify_ms);
+        }
+        if (v != FWA_V_OK || !fwa_start_matches(&p, run_len, run_digest)) {
+            ESP_LOGW(TAG, "refused self: %s", v != FWA_V_OK ? jw : "START does not match the signed image");
+            ESP_LOGW("test", "error fwloop: proof %s", v != FWA_V_OK ? jw : "START mismatch");
+            rx_auth_reset();
+            esp_partition_munmap(mh);
+            rx.loop = tx.loop = false;
+            rx.state = R_IDLE;
+            progress = -1;
+            return;
+        }
+        rx.proof = p;
+        rx.proof_ok = true;
+        if (mode == LOOP_BAD_DIGEST) rx.proof.digest[31] ^= 0x01;   // past the START check: only the end can see it
+        auth = "signed";
+    }
     rx.state = R_LOOP;
     rx.active = true;
     progress = 0;
@@ -1132,14 +1589,117 @@ static void do_loop(void)
     esp_partition_munmap(mh);
     if (!why && !rx.done_ok) why = "not verified";
     if (rx.state != R_IDLE) rx_stop(false);
+    rx_auth_reset();
     char s[12], r[12];
     fmt_rate(s, sizeof(s), r, sizeof(r), run_len, us);
-    if (why) ESP_LOGW("test", "error fwloop: %s", why);
+    if (why) ESP_LOGW("test", "error fwloop: %s%s%s%s", why, last_fail[0] ? " (" : "", last_fail, last_fail[0] ? ")" : "");
     else
         ESP_LOGI("test", "fwloop ok part=%s len=%lu sectors=%lu crc_errors=%lu resent=%lu s=%s kbps=%s write_max_ms=%lu "
-                 "stack_free=%u", rx.part->label, (unsigned long)run_len, (unsigned long)rx.nsec,
-                 (unsigned long)rx.nacks, (unsigned long)tx.resent, s, r, (unsigned long)(rx.write_us_max / 1000),
+                 "auth=%s sign_ms=%lu verify_ms=%lu stack_free=%u", rx.part->label, (unsigned long)run_len,
+                 (unsigned long)rx.nsec, (unsigned long)rx.nacks, (unsigned long)tx.resent, s, r,
+                 (unsigned long)(rx.write_us_max / 1000), auth, (unsigned long)sign_ms, (unsigned long)verify_ms,
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+
+// ======================================================================================================
+// Admin and trust (console "admin ...", "trust ..."; fw task: the ECDSA needs this task's stack)
+// ======================================================================================================
+
+EXT_RAM_BSS_ATTR static uint8_t trust_in[FWA_PUB_LEN];   // console -> fw task
+static volatile bool trust_busy;
+
+static bool admin_make_key(void)
+{
+    uint8_t priv[FWA_PRIV_LEN], pub[FWA_PUB_LEN];
+    char old[FWA_SHORT_LEN + 1] = "";
+    const app_cfg_t *c = config_get();
+    if (c->has_admin_key) short_of(c->admin_pub, old);
+    int64_t t0 = esp_timer_get_time();
+    int rc = ec_keygen(priv, pub);
+    bool ok = !rc && config_set_admin_key(priv, pub);
+    fwa_zero(priv, sizeof(priv));
+    if (!ok) { ESP_LOGW("test", "error admin: no key pair (%s -0x%04x)", rc ? "keygen" : "nvs", rc ? -rc : 0); return false; }
+    char k[FWA_SHORT_LEN + 1];
+    short_of(pub, k);
+    ESP_LOGI(TAG, "admin key new %s (%lu ms)%s%s%s", k, (unsigned long)ms_since(t0), old[0] ? ", replaces " : "", old,
+             old[0] ? ": boards that trusted it must trust the new one" : "");
+    return true;
+}
+
+static void do_selftest(void)
+{
+    const app_cfg_t *c = config_get();
+    if (!c->has_admin_key) { ESP_LOGW("test", "error admin selftest: no key (admin on makes one)"); return; }
+    uint8_t m[64], h[32], sig[FWA_SIG_LEN];
+    esp_fill_random(m, sizeof(m));
+    mbedtls_sha256(m, sizeof(m), h, 0);
+    int64_t t0 = esp_timer_get_time();
+    int src = ec_sign(h, sig);
+    uint32_t sms = ms_since(t0);
+    t0 = esp_timer_get_time();
+    int vrc = src ? -1 : ec_verify(c->admin_pub, h, sig);
+    uint32_t vms = ms_since(t0);
+    h[0] ^= 0x01;
+    int trc = src ? -1 : ec_verify(c->admin_pub, h, sig);   // a changed message must not verify
+    if (src || vrc || !trc) {
+        ESP_LOGW("test", "error admin selftest: sign -0x%04x verify -0x%04x tampered %s", src < 0 ? -src : src,
+                 vrc < 0 ? -vrc : vrc, trc ? "refused" : "ACCEPTED");
+        return;
+    }
+    ESP_LOGI("test", "ok admin selftest %lu sign_ms=%lu verify_ms=%lu tamper=refused stack_free=%u internal_min=%u",
+             (unsigned long)(sms + vms), (unsigned long)sms, (unsigned long)vms,
+             (unsigned)uxTaskGetStackHighWaterMark(NULL),
+             (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024));
+}
+
+static void do_admin(uint32_t op)
+{
+    const app_cfg_t *c = config_get();
+    char k[FWA_SHORT_LEN + 1];
+    switch (op) {
+    case MESH_FW_ADMIN_ON:
+        if (!c->has_admin_key && !admin_make_key()) return;
+        config_set_admin(true);
+        mesh_set_admin(true);                         // the advert's MP_F_ADMIN
+        short_of(c->admin_pub, k);
+        ESP_LOGI(TAG, "admin on (key %s)", k);
+        ESP_LOGI("test", "ok admin on %s", k);
+        break;
+    case MESH_FW_ADMIN_OFF:
+        config_set_admin(false);
+        mesh_set_admin(false);
+        ESP_LOGI(TAG, "admin off");
+        ESP_LOGI("test", "ok admin off");
+        break;
+    case MESH_FW_ADMIN_NEW:
+        if (!admin_make_key()) return;
+        short_of(c->admin_pub, k);
+        if (c->admin) ESP_LOGI(TAG, "admin on (key %s)", k);
+        ESP_LOGI("test", "ok admin new %s", k);
+        break;
+    case MESH_FW_ADMIN_SELFTEST:
+        do_selftest();
+        break;
+    }
+}
+
+static void do_trust(uint32_t set)
+{
+    char k[FWA_SHORT_LEN + 1];
+    if (!set) {
+        config_clear_trusted();
+        ESP_LOGI(TAG, "trusted admin none");
+        ESP_LOGI("test", "ok trust none");
+        return;
+    }
+    uint8_t pub[FWA_PUB_LEN];
+    memcpy(pub, trust_in, sizeof(pub));
+    trust_busy = false;
+    if (!ec_pub_valid(pub)) { ESP_LOGW("test", "error trust: not a P-256 public key"); return; }
+    if (!config_set_trusted(pub)) { ESP_LOGW("test", "error trust: not saved"); return; }
+    short_of(pub, k);
+    ESP_LOGI(TAG, "trusted admin %s", k);
+    ESP_LOGI("test", "ok trust %s\u2026", k);
 }
 
 static void do_confirm(void)
@@ -1196,9 +1756,17 @@ static void on_event(uint32_t e)
         ESP_LOGI(TAG, "receiving %lu bytes from %s (mtu %u)", (unsigned long)rx.len, ad, ble_att_mtu(rx.conn));
         break;
     }
-    case E_RXERR: if (rx.state != R_IDLE) rx_fail("%s", rxe_text[a < 4 ? a : 0]); break;
+    case E_RXERR:
+        if (rx.state == R_IDLE) break;
+        if (a == RXE_NO_PROOF || a == RXE_UNSIGNED_START) rx_refuse(rxe_text[a]);   // "fw: refused <addr>: no proof"
+        else rx_fail("%s", rxe_text[a < RXE_N ? a : 0]);
+        break;
+    case E_CHAL: rx_on_challenge_request(); break;
+    case E_PROOF: rx_on_proof(); break;
+    case E_ADMIN: do_admin(a); break;
+    case E_TRUST: do_trust(a); break;
     case E_INFO: do_info(); break;
-    case E_LOOP: do_loop(); break;
+    case E_LOOP: do_loop(a); break;
     case E_LINK: rx_on_link(a); break;
     case E_TUNE:
         ESP_LOGI("test", "fwtune window=%u probe=%u scan=%u adv=%u rxscan=%u itvl=%u mince=%u maxce=%u seq=%u", tune.window,
@@ -1213,8 +1781,8 @@ static void fw_task(void *arg)
     uint32_t next_poll = now_ms() + POLL_MS;
     for (;;) {
         uint32_t e;
-        if (rx.state == R_LINKED) {
-            if (xQueueReceive(secq, &e, pdMS_TO_TICKS(200)) == pdTRUE) {
+        if (rx.state == R_LINKED) {                   // short waits before START: the challenge and the proof
+            if (xQueueReceive(secq, &e, pdMS_TO_TICKS(rx.active ? 200 : 20)) == pdTRUE) {
                 rx_on_sector_event(e);
                 while (xQueueReceive(secq, &e, 0) == pdTRUE) rx_on_sector_event(e);
             }
@@ -1233,7 +1801,14 @@ static void fw_task(void *arg)
 }
 
 static void cmd_fwinfo(int argc, char **argv) { post(evq, EV(E_INFO, 0)); }
-static void cmd_fwloop(int argc, char **argv) { post(evq, EV(E_LOOP, 0)); }
+static void cmd_fwloop(int argc, char **argv)
+{
+    uint32_t mode = LOOP_PLAIN;
+    if (argc == 2 && !strcmp(argv[1], "baddigest")) mode = LOOP_BAD_DIGEST;
+    else if (argc == 2 && !strcmp(argv[1], "badsig")) mode = LOOP_BAD_SIG;
+    else if (argc != 1) { ESP_LOGW("test", "error fwloop: expected nothing, baddigest or badsig"); return; }
+    post(evq, EV(E_LOOP, mode));
+}
 
 // fwtune [key=value ...]: window=1..8 probe=KB scan=0..100 adv=0|1 rxscan=0|1 itvl=6..3200 mince=N maxce=N (RAM only)
 static void cmd_fwtune(int argc, char **argv)
@@ -1306,9 +1881,9 @@ void mesh_fw_init(void)
     if (rc) ESP_LOGE(TAG, "GATT service rc=%d", rc);
     mesh_set_gap_hook(gap_hook);
     testcon_register("fwinfo", "fwinfo", cmd_fwinfo);
-    testcon_register("fwloop", "fwloop (own image into the other slot, boot unchanged)", cmd_fwloop);
+    testcon_register("fwloop", "fwloop [baddigest|badsig]", cmd_fwloop);
     testcon_register("fwtune", "fwtune [window=N probe=KB scan=MS adv=0|1 rxscan=0|1 itvl=N mince=N maxce=N seq=0|1]", cmd_fwtune);
-    if (xTaskCreatePinnedToCore(fw_task, "fw", 5120, NULL, 4, &fw_task_h, 0) != pdPASS) {
+    if (xTaskCreatePinnedToCore(fw_task, "fw", FW_STACK, NULL, 4, &fw_task_h, 0) != pdPASS) {
         ESP_LOGE(TAG, "no task");
         return;
     }
@@ -1321,6 +1896,21 @@ void mesh_fw_init(void)
     ESP_LOGI(TAG, "image %s %s %s %lu bytes, %s; init took %u bytes of internal RAM",
              run_part ? run_part->label : "?", run_state_name, d->version, (unsigned long)run_len,
              img_servable ? "servable" : "not servable", (unsigned)(free0 > free1 ? free0 - free1 : 0));
+}
+
+void mesh_fw_admin(int op)
+{
+    post(evq, EV(E_ADMIN, op));
+}
+
+bool mesh_fw_trust(const uint8_t pub[64])
+{
+    if (!pub) { post(evq, EV(E_TRUST, 0)); return true; }
+    if (trust_busy) return false;
+    memcpy(trust_in, pub, sizeof(trust_in));
+    trust_busy = true;
+    post(evq, EV(E_TRUST, 1));
+    return true;
 }
 
 void mesh_fw_set_target(uint8_t origin)

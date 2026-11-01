@@ -6,6 +6,7 @@
 #include "nvs.h"
 #include "nvs_util.h"
 #include "board.h"
+#include "fw_auth.h"
 
 static const char *TAG = "cfg";
 #define NS "cm"
@@ -43,12 +44,23 @@ void config_load(void)
         if (nvs_get_u8(h, "dev", &u8) == ESP_OK) cfg.dev_mode = u8 != 0;
         if (nvs_get_str(h, "name", name, &n) == ESP_OK) strlcpy(cfg.name, name, sizeof(cfg.name));
         if (nvs_get_u8(h, "bright", &u8) == ESP_OK) cfg.bright = u8 > 100 ? 100 : u8;
+        size_t kn = sizeof(cfg.admin_pub), pn = 0;
+        cfg.has_admin_key = nvs_get_blob(h, "adm_own", cfg.admin_pub, &kn) == ESP_OK && kn == sizeof(cfg.admin_pub) &&
+                            nvs_get_blob(h, "adm_priv", NULL, &pn) == ESP_OK && pn == FWA_PRIV_LEN;
+        if (!cfg.has_admin_key) memset(cfg.admin_pub, 0, sizeof(cfg.admin_pub));
+        if (nvs_get_u8(h, "admin", &u8) == ESP_OK) cfg.admin = u8 != 0 && cfg.has_admin_key;
+        kn = sizeof(cfg.trusted);
+        cfg.has_trusted = nvs_get_blob(h, "adm_pub", cfg.trusted, &kn) == ESP_OK && kn == sizeof(cfg.trusted);
+        if (!cfg.has_trusted) memset(cfg.trusted, 0, sizeof(cfg.trusted));
         nvs_close(h);
     }
     char c2[8] = "auto";
     if (cfg.b2_set) snprintf(c2, sizeof(c2), "#%02x%02x%02x", cfg.b2_r, cfg.b2_g, cfg.b2_b);
-    ESP_LOGI(TAG, "loaded: color #%02x%02x%02x, color2 %s, dev %s, name \"%s\", bright %u", cfg.r, cfg.g, cfg.b, c2,
-             cfg.dev_mode ? "on" : "off", cfg.name, cfg.bright);
+    char ak[FWA_SHORT_LEN + 1] = "none", tk[FWA_SHORT_LEN + 1] = "none";
+    if (cfg.has_admin_key) fwa_short_id(cfg.admin_pub, ak);
+    if (cfg.has_trusted) fwa_short_id(cfg.trusted, tk);
+    ESP_LOGI(TAG, "loaded: color #%02x%02x%02x, color2 %s, dev %s, name \"%s\", bright %u, admin %s (key %s), trusted %s",
+             cfg.r, cfg.g, cfg.b, c2, cfg.dev_mode ? "on" : "off", cfg.name, cfg.bright, cfg.admin ? "on" : "off", ak, tk);
     apply_bright();
 }
 
@@ -120,4 +132,69 @@ void config_clear_color2(void)
         commit_close(h, err == ESP_ERR_NVS_NOT_FOUND || nvs_check(err, NS "/rgb2"));
     }
     ESP_LOGI(TAG, "color2 auto");
+}
+
+// ---- secure updates ----
+
+void config_set_admin(bool on)
+{
+    cfg.admin = on && cfg.has_admin_key;
+    nvs_handle_t h;
+    if (open_rw(&h)) commit_close(h, nvs_check(nvs_set_u8(h, "admin", cfg.admin), NS "/admin"));
+    ESP_LOGI(TAG, "admin %s", cfg.admin ? "on" : "off");
+}
+
+bool config_set_admin_key(const uint8_t priv[32], const uint8_t pub[64])
+{
+    nvs_handle_t h;
+    if (!open_rw(&h)) return false;
+    bool ok = nvs_check(nvs_set_blob(h, "adm_priv", priv, FWA_PRIV_LEN), NS "/adm_priv") &&
+              nvs_check(nvs_set_blob(h, "adm_own", pub, FWA_PUB_LEN), NS "/adm_own");
+    ok = ok && nvs_check(nvs_commit(h), "commit " NS);
+    nvs_close(h);
+    if (!ok) return false;
+    memcpy(cfg.admin_pub, pub, FWA_PUB_LEN);
+    cfg.has_admin_key = true;
+    char id[FWA_SHORT_LEN + 1];
+    fwa_short_id(pub, id);
+    ESP_LOGI(TAG, "admin key %s", id);
+    return true;
+}
+
+bool config_admin_priv(uint8_t out[32])
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
+    size_t n = FWA_PRIV_LEN;
+    bool ok = nvs_get_blob(h, "adm_priv", out, &n) == ESP_OK && n == FWA_PRIV_LEN;
+    nvs_close(h);
+    if (!ok) fwa_zero(out, FWA_PRIV_LEN);
+    return ok;
+}
+
+bool config_set_trusted(const uint8_t pub[64])
+{
+    nvs_handle_t h;
+    if (!open_rw(&h)) return false;
+    bool ok = nvs_check(nvs_set_blob(h, "adm_pub", pub, FWA_PUB_LEN), NS "/adm_pub");
+    commit_close(h, ok);
+    if (!ok) return false;
+    memcpy(cfg.trusted, pub, FWA_PUB_LEN);
+    cfg.has_trusted = true;
+    char id[FWA_SHORT_LEN + 1];
+    fwa_short_id(pub, id);
+    ESP_LOGI(TAG, "trusted %s", id);
+    return true;
+}
+
+void config_clear_trusted(void)
+{
+    cfg.has_trusted = false;
+    memset(cfg.trusted, 0, sizeof(cfg.trusted));
+    nvs_handle_t h;
+    if (open_rw(&h)) {
+        esp_err_t err = nvs_erase_key(h, "adm_pub");
+        commit_close(h, err == ESP_ERR_NVS_NOT_FOUND || nvs_check(err, NS "/adm_pub"));
+    }
+    ESP_LOGI(TAG, "trusted none");
 }

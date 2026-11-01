@@ -62,6 +62,10 @@
   .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--line);
          vertical-align: middle; margin-right: 6px; }
   #cfg-peers { margin: 4px 0 0; padding-left: 20px; }
+  #cfg-secure { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+  #cfg-secure h3 { font-size: 1rem; margin: 0 0 4px; }
+  #cfg-admin-key { display: block; font: 12px/1.4 ui-monospace, Consolas, monospace; word-break: break-all;
+                   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; flex: 1; }
   #cfg-log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); background: var(--bg);
              border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 12px 0 0; max-height: 200px;
              overflow: auto; white-space: pre-wrap; word-break: break-all; }
@@ -105,8 +109,8 @@
   <details class="card" id="cfg-card">
     <summary>Configure over USB</summary>
     <p class="muted" style="margin:0 0 12px">With the board plugged in (and the Install dialog closed: it holds the
-      port), connect to read and change its colour, wave colour, name, dev mode and brightness. Nothing leaves your
-      computer.</p>
+      port), connect to read and change its colour, wave colour, name, dev mode, brightness and secure updates.
+      Nothing leaves your computer.</p>
     <div class="row">
       <button class="btn" id="cfg-connect" type="button">Connect</button>
       <button class="btn quiet" id="cfg-disconnect" type="button" hidden>Disconnect</button>
@@ -144,6 +148,32 @@
         <label for="cfg-bright">Brightness</label>
         <input type="range" id="cfg-bright" min="0" max="100" step="1" value="100">
         <span id="cfg-bright-v">100 %</span>
+      </div>
+      <div id="cfg-secure" hidden>
+        <h3>Secure updates</h3>
+        <p class="muted" style="margin:0 0 8px">A board out of dev mode takes a new firmware only from the admin board
+          whose key it trusts, signed by it. Make one board the admin, copy its key, and paste it into the others'
+          "Trusted admin key".</p>
+        <div class="row">
+          <label for="cfg-admin">Admin</label>
+          <input type="checkbox" class="switch" id="cfg-admin" role="switch">
+          <span class="muted">this board signs its firmware for the boards that trust it</span>
+        </div>
+        <div id="cfg-admin-box" hidden>
+          <p style="margin:4px 0">This board is the admin. Its key:</p>
+          <div class="row">
+            <code id="cfg-admin-key"></code>
+            <button class="btn quiet" id="cfg-admin-copy" type="button">Copy</button>
+          </div>
+        </div>
+        <div class="row">
+          <label for="cfg-trust">Trusted admin key</label>
+          <input type="text" id="cfg-trust" placeholder="paste the admin board's key (88 characters)" autocomplete="off"
+                 spellcheck="false">
+          <button class="btn quiet" id="cfg-trust-set" type="button">Trust</button>
+          <button class="btn quiet" id="cfg-trust-forget" type="button">Forget</button>
+        </div>
+        <div class="row"><label></label><span class="muted" id="cfg-trust-now">trusts no admin key</span></div>
       </div>
       <dl class="kv">
         <dt>Firmware</dt><dd id="cfg-version">?</dd>

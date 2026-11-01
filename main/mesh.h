@@ -10,6 +10,7 @@ typedef struct {
     uint8_t origin;         // origin id: the low byte of the address (addr[0])
     uint8_t r, g, b;
     bool holding, dev, servable;
+    bool admin;             // MP_F_ADMIN: the peer is an admin board (it signs its image for boards out of dev mode)
     uint8_t ver[4];         // major, minor, patch, version kind
     int8_t rssi;
     uint32_t last_ms;       // when it was last heard (ms since boot)
@@ -24,6 +25,7 @@ void mesh_set_color(uint8_t r, uint8_t g, uint8_t b);   // this board's colour
 // (bytes 19-21) so that the peers draw this board's waves with it too
 void mesh_set_color2(uint8_t r, uint8_t g, uint8_t b, bool set);
 void mesh_set_dev_mode(bool on);
+void mesh_set_admin(bool on);                           // the advert's MP_F_ADMIN bit (secure updates, mesh_fw.c)
 void mesh_get_mix(uint8_t *r, uint8_t *g, uint8_t *b);  // the mix of every holder, this board included
 int mesh_peers(mesh_peer_t *out, int max);              // the peers heard, up to max; returns the count
 const char *mesh_own_addr(void);                        // "aa:bb:cc:dd:ee:ff" (most significant first), "" before sync

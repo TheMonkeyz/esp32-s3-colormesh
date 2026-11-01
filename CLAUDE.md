@@ -103,6 +103,10 @@ Add each preference the user states (gestures, wording, timing, look) with the d
 - 2026-10-31, waves (from mockups): bicolour waves started by a TAP on the main screen (centre = rings outward;
   left / right / top / bottom zones = bands moving in from that side); colour B = the opposite hue of the own
   colour, nothing to set; waves from several boards merge per pixel like the colours; a hold still adds its colour.
+- 2026-11-01, secure updates: the user chose a **paired admin board** over signed releases. The admin board holds an
+  ECDSA P-256 key pair (private key in plain NVS: whoever holds the admin board can push firmware; said to the
+  user); other boards store its public key once over USB (`trust <base64>`); a board not in dev mode pulls only
+  after a nonce challenge the admin signs over (nonce, image length, SHA-256, version). Dev mode stays open.
 
 
 ## Useful facts

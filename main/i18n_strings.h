@@ -18,6 +18,7 @@ X(T_SWIPE_BACK,     "Swipe left to go back",       "Glissez vers la gauche\npour
 X(T_HOLD_HINT,      "Touch the screen to send your colour", "Toucher l'écran pour envoyer votre couleur")
 X(T_NEAR,           "%d near  ·  %s",              "%d à portée  ·  %s")
 X(T_DEV,            "DEV",                         "DEV")
+X(T_ADMIN,          "ADMIN",                       "ADMIN")      // this board signs updates (secure updates)
 
 // System page
 X(T_SYSTEM,         "System",                      "Système")
