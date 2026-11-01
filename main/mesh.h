@@ -22,3 +22,32 @@ void mesh_get_mix(uint8_t *r, uint8_t *g, uint8_t *b);  // the mix of every hold
 int mesh_peers(mesh_peer_t *out, int max);              // the peers heard, up to max; returns the count
 const char *mesh_own_addr(void);                        // "aa:bb:cc:dd:ee:ff" (most significant first), "" before sync
 bool mesh_holding(void);
+
+// ---- radio control for the dev-mode firmware pull (mesh_fw.c). Call from a task, never from a touch/LVGL
+// handler: these talk to NimBLE directly (or wake the mesh task, which does). ----
+struct ble_gap_event;
+void mesh_set_target(uint8_t origin);                   // the peer this board wants firmware from (MP_TARGET_NONE = none)
+// Connectable advertising (BLE_GAP_CONN_MODE_UND, non-discoverable) on/off; synchronous stop/start. No Flags AD:
+// the 30-byte ColorMesh AD plus a 3-byte Flags AD would not fit the 31-byte legacy payload, and with
+// BLE_GAP_DISC_MODE_NON every flag is zero, so the Flags AD may be left out (Core spec Vol 3 Part C 11.1.3).
+// A central that connects ends this advertisement; the mesh task restarts it in the mode set here.
+void mesh_set_connectable(bool on);
+void mesh_adv_pause(bool pause);                        // stop advertising (true) / resume (false); synchronous
+void mesh_scan_pause(bool pause);                       // cancel the scan (true, before ble_gap_connect) / resume
+void mesh_refresh(void);                                // re-read the OTA state (servable/pending), bump seq, re-advertise
+uint8_t mesh_own_origin(void);                          // the origin id (addr[0]), 0 before sync
+uint8_t mesh_own_addr_type(void);                       // for ble_gap_connect(); valid after sync
+bool mesh_synced(void);                                 // the host is synced (advertising and scanning are up)
+// Every GAP event of the mesh's own advertising and scanning procedures goes here first (connect, disconnect, MTU,
+// ...: the firmware pull's peripheral side). Return value ignored. NULL removes it. Runs in the NimBLE host task.
+typedef void (*mesh_gap_hook_t)(struct ble_gap_event *event);
+void mesh_set_gap_hook(mesh_gap_hook_t hook);
+// Radio counters (risk 3 of docs/RESEARCH-BLE.md); also in the test console's "where" (ble_rep= ble_cm= ...)
+typedef struct {
+    uint32_t reports_s, colormesh_s;    // reports per second over the last 10 s window
+    uint32_t q_max, q_max_all;          // queue high-water mark: last 10 s window, since boot (of MESH_Q_LEN)
+    uint32_t cb_us_max, cb_us_max_all;  // GAP callback cost, max over the last 10 s window, since boot
+    uint32_t drops;                     // reports lost to a full queue, since boot
+    uint16_t adv_itvl;                  // advertising interval in 0.625 ms units (0x20 = 20 ms), 0 = off
+} mesh_stats_t;
+void mesh_get_stats(mesh_stats_t *out);
