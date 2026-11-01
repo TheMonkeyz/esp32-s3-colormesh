@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "calls.h"
 
 // Voice clips and calls (docs/ARCHITECTURE.md "Voice"). Record up to CLIP_REC_MAX_MS from the microphones, then send
 // the clip to every board in range at once: IMA ADPCM, cut into chunks (clip_chunks.h) and repeated CLIP_ROUNDS times
@@ -32,6 +33,7 @@ typedef struct {
     uint8_t r, g, b;                        // CLIP_PLAYING / CLIP_RINGING: the sender's colour
     bool receiving;                         // a peer's clip is being collected
     clip_call_t call;
-    uint8_t ans_r, ans_g, ans_b;            // CLIP_CALL_ANSWERED: the colour of the board that answered
+    int n_ans;                              // the boards that answered this board's call, in order
+    call_ans_t ans[CALL_MAX_ANS];
 } clip_state_t;
 void clip_get_state(clip_state_t *out);

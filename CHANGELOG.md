@@ -5,6 +5,12 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.7 - 2026-11-01
+- Calls: the caller sees everyone who answers, one dot per board in its colour, with the doo-di-dit for each; an
+  answer that comes after "Answered" closed opens it again, as long as the others can still ring.
+- The Call button is easier to hit: a bigger touch area, mostly below it, and a press near it never starts a
+  recording.
+
 ## v0.6.0-rc.5 - 2026-11-01
 - Calls: the ring now starts on its first note (the speaker wakes up on a short silence first).
 - Calls: the ringing board says "Touch the screen to answer"; a touch answers. The caller shows "Calling…" in its

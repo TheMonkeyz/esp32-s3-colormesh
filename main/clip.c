@@ -23,6 +23,7 @@
 #include "adpcm.h"
 #include "clip_chunks.h"
 #include "ringtone.h"
+#include "calls.h"
 
 static const char *TAG = "clip";
 
@@ -40,8 +41,6 @@ static const char *TAG = "clip";
 #define RING_GAP_MS  3200                   // between the phrases, as the old phone
 #define SPK_PREROLL_MS 250                   // silence after the speaker opens, before the sound
 #define CALLER_NONE  -1
-#define CALL_OUT_MS  ((CLIP_RING_TIMES * 2970 + (CLIP_RING_TIMES - 1) * RING_GAP_MS) + 2000)   // the callees' ring, + margin
-#define ANSWERED_MS  4000                   // "Answered" stays this long
 #define PER_ITVL     8                      // periodic interval, 1.25 ms units: 10 ms
 #define SYNC_WAIT_MS 4000                   // no sync to the sender's train by then: give up
 #define SYNC_TIMEOUT 100                    // 10 ms units: the train is lost after 1 s without a packet
@@ -61,7 +60,8 @@ static bool mic_ok;
 static int16_t *rec_pcm, *play_pcm;         // REC_MAX mono samples each
 static uint8_t *tx_buf, *rx_buf;            // CLIP_MAX_BYTES each
 static volatile bool recording, ring_stop, ring_answer;
-static volatile int64_t call_until, answered_until;   // esp_timer us: the outgoing call's screens (0 = none)
+static call_t call;                         // this board's outgoing call and its answers, under call_mux
+static portMUX_TYPE call_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t rec_n;                      // clip task: samples recorded
 static uint32_t tx_len;                     // clip task: the last clip's ADPCM bytes (0 = none)
 static uint8_t tx_id, tx_ds;
@@ -343,14 +343,17 @@ static void on_clip(const uint8_t addr[6], uint8_t origin, uint8_t id, uint8_t d
     if (q) xQueueSend(q, &e, 0);
 }
 
-// A callee answered this board's call (mesh task): "Answered" in its colour
+static uint32_t ms_now(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+// A callee answered this board's call (mesh task): one more dot on "Answered", and the doo-di-dit
 static void on_answer(uint8_t origin, uint8_t r, uint8_t g, uint8_t b)
 {
-    if (!call_until) return;                         // no call out (cancelled, or over)
-    ESP_LOGI(TAG, "call answered by %02x", origin);
-    st.ans_r = r, st.ans_g = g, st.ans_b = b;
-    call_until = 0;
-    answered_until = esp_timer_get_time() + ANSWERED_MS * 1000LL;
+    taskENTER_CRITICAL(&call_mux);
+    bool fresh = call_answer(&call, origin, r, g, b, ms_now());
+    int n = call.n;
+    taskEXIT_CRITICAL(&call_mux);
+    if (!fresh) return;                              // no call out, after the ring, or this board again
+    ESP_LOGI(TAG, "call answered by %02x (%d so far)", origin, n);
     post(EV_ANSWERED);
 }
 
@@ -551,15 +554,19 @@ bool clip_play_last(void)
 
 void clip_ring(void)
 {
-    answered_until = 0;
-    call_until = esp_timer_get_time() + CALL_OUT_MS * 1000LL;
+    taskENTER_CRITICAL(&call_mux);
+    call_begin(&call, ms_now());
+    taskEXIT_CRITICAL(&call_mux);
     mesh_start_ring();
 }
 
 void clip_call_cancel(void)
 {
-    if (call_until || answered_until) ESP_LOGI(TAG, "call screen closed");
-    call_until = answered_until = 0;
+    taskENTER_CRITICAL(&call_mux);
+    bool was = call.active;
+    call_cancel(&call);
+    taskEXIT_CRITICAL(&call_mux);
+    if (was) ESP_LOGI(TAG, "call screen closed");
 }
 
 void clip_ring_local(void) { post(EV_RING_LOCAL); }
@@ -573,11 +580,15 @@ void clip_ring_stop(bool answer)
 void clip_get_state(clip_state_t *out)
 {
     *out = st;
-    int64_t now = esp_timer_get_time();
-    if (call_until && now > call_until) {
-        ESP_LOGI(TAG, "call not answered");
-        call_until = 0;
-    }
-    if (answered_until && now > answered_until) answered_until = 0;
-    out->call = answered_until ? CLIP_CALL_ANSWERED : call_until ? CLIP_CALL_OUT : CLIP_CALL_NONE;
+    taskENTER_CRITICAL(&call_mux);
+    bool was = call.active;
+    int n0 = call.n;                                 // call_phase clears the call when it ends
+    call_phase_t ph = call_phase(&call, ms_now());
+    bool ended = was && !call.active;
+    out->n_ans = call.n;
+    for (int i = 0; i < call.n; i++) out->ans[i] = call.ans[i];
+    taskEXIT_CRITICAL(&call_mux);
+    if (ended && !n0) ESP_LOGI(TAG, "call not answered");
+    else if (ended) ESP_LOGI(TAG, "call over, %d answered", n0);
+    out->call = ph == CALL_ANSWERED ? CLIP_CALL_ANSWERED : ph == CALL_OUT ? CLIP_CALL_OUT : CLIP_CALL_NONE;
 }

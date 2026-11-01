@@ -8,6 +8,7 @@
 #include "adpcm.h"
 #include "clip_chunks.h"
 #include "ringtone.h"
+#include "calls.h"
 
 #define M_PI 3.14159265358979323846
 
@@ -208,6 +209,35 @@ static void test_answered(void)
     }
 }
 
+// The outgoing call: every answerer counted once, the "Answered" screen open 4 s after each new answer (a late one
+// opens it again), answers after the ring ignored, a cancelled call takes none, the clock wrapping
+static void test_calls(void)
+{
+    call_t c;
+    uint32_t t0 = 0xFFFFF000u;                  // wraps during the call
+    call_begin(&c, t0);
+    CHECK(call_phase(&c, t0 + 10) == CALL_OUT, "calling");
+    CHECK(call_answer(&c, 0x1a, 0x80, 0xff, 0, t0 + 3000), "first answer");
+    CHECK(!call_answer(&c, 0x1a, 0x80, 0xff, 0, t0 + 3100), "the same board twice");
+    CHECK(call_answer(&c, 0x76, 0, 0, 0xff, t0 + 5000), "second answer");
+    CHECK(c.n == 2 && c.ans[0].origin == 0x1a && c.ans[1].origin == 0x76 && c.ans[1].b == 0xff, "both listed");
+    CHECK(call_phase(&c, t0 + 8900) == CALL_ANSWERED, "open 4 s after the latest answer");
+    CHECK(call_phase(&c, t0 + 9100) == CALL_NONE && c.active, "closed, still listening");
+    CHECK(call_answer(&c, 0x33, 1, 2, 3, t0 + 12000) && call_phase(&c, t0 + 12001) == CALL_ANSWERED,
+          "a late answer opens it again");
+    CHECK(c.n == 3, "three answerers");
+    CHECK(call_phase(&c, t0 + 16100) == CALL_NONE && c.active, "closed again");
+    CHECK(!call_answer(&c, 0x44, 1, 2, 3, t0 + CALL_OUT_MS + 1), "after the ring: ignored");
+    CHECK(call_phase(&c, t0 + CALL_OUT_MS + 2) == CALL_NONE && !c.active, "the call ends");
+    call_begin(&c, 100);
+    call_cancel(&c);
+    CHECK(!call_answer(&c, 0x1a, 1, 1, 1, 200) && call_phase(&c, 201) == CALL_NONE, "cancelled: no answer");
+    call_begin(&c, 100);
+    for (int i = 0; i < CALL_MAX_ANS; i++) call_answer(&c, (uint8_t)i, 1, 1, 1, 200);
+    CHECK(c.n == CALL_MAX_ANS && !call_answer(&c, 0xEE, 1, 1, 1, 300), "a full list");
+    CHECK(call_phase(&c, 15000) == CALL_NONE && c.active, "no answers yet expired: listening, nothing shown");
+}
+
 int main(void)
 {
     test_adpcm();
@@ -216,5 +246,6 @@ int main(void)
     test_ids();
     test_ringtone();
     test_answered();
+    test_calls();
     return check_done("voice");
 }

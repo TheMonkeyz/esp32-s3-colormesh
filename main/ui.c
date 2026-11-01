@@ -65,6 +65,7 @@ static const char *const page_name[PG_N] = { "pick", "main", "system", "game", "
 static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *pg_game, *pg_voice, *scr_msg;
 static lv_obj_t *v_ring, *v_arc, *v_title, *v_disc, *v_secs, *v_hint, *v_btn, *v_btn_l;
 static lv_obj_t *ov, *ov_ring, *ov_title, *ov_body;   // on the top layer: an incoming clip or call
+static lv_obj_t *ov_dot[CALL_MAX_ANS];       // the outgoing call's answerers, one dot each in its colour
 static lv_obj_t *g_ring, *g_arc, *g_title, *g_word, *g_hint, *g_icon[3], *g_sel, *g_big, *g_out, *g_peer[G_PEERS],
                 *g_pdot[G_PEERS];
 static lv_obj_t *p_title, *p_sub, *p_back, *p_sw[SW_N], *p_dot[SW_N];
@@ -712,9 +713,12 @@ static void game_create_page(lv_obj_t *pg)
 
 #define V_DISC     150                        // the centre disc (own colour; red while recording)
 #define V_BTN_W    170
-#define V_BTN_H    56
+#define V_BTN_H    60
 #define V_BTN_Y    326
 #define C_REC      lv_color_hex(0xFF3B30)
+#define V_NO_REC_Y (V_BTN_Y - V_BTN_PAD)                // a press this low is for the button, never a recording
+#define V_BTN_PAD  40                            // the button's touch area reaches this far past its edge (rc.6: a
+                                              // press 21 px under it missed: fingers land low)
 
 static struct { int phase, tenths, pct; bool recv; uint32_t own; } vlast = { .phase = -1 };
 
@@ -754,10 +758,17 @@ static void voice_refresh(void)
     voice_update();
 }
 
+// A press on the page (not on the button): records, unless it is near the button (a finger a little off the button
+// started a recording instead of a call, rc.5)
 static void voice_pressed(lv_event_t *e)
 {
     if (!page_shown(PG_VOICE)) return;
-    clip_rec_begin();
+    lv_point_t p = { 0, 0 };
+    lv_indev_t *in = lv_indev_active();
+    if (in) lv_indev_get_point(in, &p);
+    bool low = p.y >= V_NO_REC_Y;
+    ESP_LOGI(TAG, "voice press at %d,%d%s", (int)p.x, (int)p.y, low ? " (near the button: no recording)" : "");
+    if (!low) clip_rec_begin();
 }
 
 static void voice_released(lv_event_t *e) { clip_rec_end(true); }
@@ -812,6 +823,7 @@ static void voice_create_page(lv_obj_t *pg)
     lv_obj_set_style_bg_color(v_btn, lv_color_hex(0x2BB24C), 0);
     lv_obj_set_style_shadow_width(v_btn, 0, 0);
     lv_obj_add_flag(v_btn, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_set_ext_click_area(v_btn, V_BTN_PAD);
     lv_obj_add_event_cb(v_btn, call_tapped, LV_EVENT_SHORT_CLICKED, NULL);
     v_btn_l = label(v_btn, f_small, C_TEXT, 0, V_BTN_W);
     lv_obj_center(v_btn_l);
@@ -827,6 +839,10 @@ static void overlay_tapped(lv_event_t *e)
     if (cs.phase == CLIP_RINGING) clip_ring_stop(true);
     else if (cs.phase != CLIP_PLAYING) clip_call_cancel();
 }
+
+#define OV_DOT_R    14
+#define OV_DOT_STEP 40
+#define OV_DOT_Y    320
 
 static void overlay_create(void)
 {
@@ -844,10 +860,15 @@ static void overlay_create(void)
     lv_obj_center(ov_ring);
     ov_title = label(ov, f_mid, C_TEXT, 170, 320);
     ov_body = label(ov, f_small, C_DIM, 230, 300);
+    for (int i = 0; i < CALL_MAX_ANS; i++) {
+        ov_dot[i] = shape(ov, 2 * OV_DOT_R);
+        lv_obj_set_style_bg_opa(ov_dot[i], LV_OPA_COVER, 0);
+        lv_obj_add_flag(ov_dot[i], LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 // Shown while a clip plays or a call rings here (any screen, the sender's colour), and while this board's own call
-// is out ("Calling…", the own colour) or was answered ("Answered", the colour of the board that answered)
+// is out ("Calling…") or was answered ("Answered", a dot per board that answered), both in the own colour
 static void overlay_update(void)
 {
     static const char *const names[] = { "off", "message", "call", "calling", "answered" };
@@ -858,11 +879,17 @@ static void overlay_update(void)
              : cs.call == CLIP_CALL_OUT ? 3 : cs.call == CLIP_CALL_ANSWERED ? 4 : 0;
     if (mode) {
         const app_cfg_t *c = config_get();
-        lv_color_t col = mode == 3 ? lv_color_make(c->r, c->g, c->b)
-                       : mode == 4 ? lv_color_make(cs.ans_r, cs.ans_g, cs.ans_b) : lv_color_make(cs.r, cs.g, cs.b);
+        lv_color_t col = mode >= 3 ? lv_color_make(c->r, c->g, c->b) : lv_color_make(cs.r, cs.g, cs.b);
         static const int title[] = { 0, T_MSG_IN, T_CALL_IN, T_CALL_OUT, T_CALL_ANSWERED };
         static const int body[] = { 0, T_MSG_PLAYING, T_CALL_ANSWER, T_CALL_CANCEL, T_CALL_CANCEL };
         lv_obj_set_style_border_color(ov_ring, col, 0);
+        int n = mode == 4 ? cs.n_ans : 0;           // "Answered": one dot per board that answered
+        for (int i = 0; i < CALL_MAX_ANS; i++) {
+            set_hidden(ov_dot[i], i >= n);
+            if (i >= n) continue;
+            lv_obj_set_style_bg_color(ov_dot[i], lv_color_make(cs.ans[i].r, cs.ans[i].g, cs.ans[i].b), 0);
+            lv_obj_set_pos(ov_dot[i], CX + (2 * i - (n - 1)) * OV_DOT_STEP / 2 - OV_DOT_R, OV_DOT_Y - OV_DOT_R);
+        }
         set_text(ov_title, tr(title[mode]));
         set_text(ov_body, tr(body[mode]));
     }

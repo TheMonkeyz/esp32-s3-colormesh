@@ -58,8 +58,8 @@ $(OUT)/test_rps: test_rps.c $(MAIN)/rps.c $(MAIN)/rps.h check.h | $(OUT)
 	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined 	    -I$(MAIN) -o $@ test_rps.c $(MAIN)/rps.c
 
 # The voice clip's pure parts (adpcm.c, clip_chunks.c, ringtone.c), C99 with libm
-VOICE_SRC := test_voice.c $(MAIN)/adpcm.c $(MAIN)/clip_chunks.c $(MAIN)/ringtone.c
-$(OUT)/test_voice: $(VOICE_SRC) $(MAIN)/adpcm.h $(MAIN)/clip_chunks.h $(MAIN)/ringtone.h check.h | $(OUT)
+VOICE_SRC := test_voice.c $(MAIN)/adpcm.c $(MAIN)/clip_chunks.c $(MAIN)/ringtone.c $(MAIN)/calls.c
+$(OUT)/test_voice: $(VOICE_SRC) $(MAIN)/adpcm.h $(MAIN)/clip_chunks.h $(MAIN)/ringtone.h $(MAIN)/calls.h check.h | $(OUT)
 	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -I$(MAIN) -o $@ $(VOICE_SRC) -lm
 
 $(OUT):
