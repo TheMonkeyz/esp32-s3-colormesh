@@ -266,7 +266,23 @@ a press); each row's span of visible pixels is kept so only those are blended. L
 loop draws there (`lv_display_enable_invalidation`) and back on at its end. Measured on A: picture 43-45 ms, fill
 10-14 ms a frame, 24.5-24.8 fps (main alone: 29). `shot wave` includes the page. The texts there are white with a
 black outline (`olabel`: 8 black copies 2 px around, the white one on top; `set_text` / `set_hidden` act on all) and
-the swatches have a 2 px black edge, both the user's choice (rc.12). The outlines made a picture slower: it is now
+the swatches have a 2 px black edge, both the user's choice (rc.12).
+
+Smoothness (rc.13-rc.19, v0.7.1-smooth.1-8; the user judged each step on the boards):
+- Tearing: a raw frame started on the TE edge must outrun the scan (~0.6 ms of margin for a 15.5 ms push). The local
+  board copy (`components/board`) starts every raw frame behind the scan (`te rawchase on|off`, default on), as late
+  as the last push's length allows before the next refresh reaches the bottom, else in the next refresh's window.
+- Swipes: the local forge_lvgl copy (`components/forge_lvgl`) has `slide_set_frame_hook`; `slide_frame` paints the
+  waves, one row at a time from an internal row buffer, into the pure-black pixels of the pages that show them
+  (outlines and edges are `C_EDGE` #080808 so they stay). ~60 fps.
+- Pages: the loop runs every 10 ms (the panel paces it); the page picture is compiled once (`layer_build`: opaque
+  segments copied with memcpy, edge pixels blended in RGB565) and pasted with `layer_draw`; it is retaken only when
+  something on that page changed (`mark_dirty` walks up to the page: the system page's clock had made every page's
+  picture retake each second, an 80-134 ms freeze), during a game round, or within 1 s of a touch
+  (`lv_display_get_inactive_time`: `touch_idle_ms()` read the chip, 2-3.5 ms a frame). Board A: pick 47, voice 50,
+  game 50, main 50 fps; "display: wave loop" gives the time between frames and before each push.
+- Tried and dropped: drawing the whole frame into PSRAM first (21 fps), converting the ARGB picture in place to
+  RGB565 per pixel (slower than layer_over on the S3). The outlines made a picture slower: it is now
 refreshed every 200 ms only during a game round or within 1 s of a touch, else every second (rc.12: 26-27 fps).
 
 ### Rock paper scissors (main/rps.c, mesh.c, ui.c; v0.5.0)

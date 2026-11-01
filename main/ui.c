@@ -148,7 +148,15 @@ static lv_obj_t *olabel(lv_obj_t *parent, lv_font_t *f, int y, int w)
 
 static bool outlined(lv_obj_t *l) { return lv_obj_get_user_data(l) == &outlined_tag; }
 
-static bool snap_dirty;                       // a page's look changed: the picture over the waves is old
+static bool snap_dirty;                       // the page under the waves changed: its picture is old
+static lv_obj_t *snap_obj;                    // that page (NULL: none): only a change on it marks the picture old (the
+                                              // system page's clock and memory texts did every second: a retake froze
+                                              // the waves 80-134 ms each time, smooth.7)
+static void mark_dirty(lv_obj_t *o)
+{
+    for (; o && snap_obj; o = lv_obj_get_parent(o))
+        if (o == snap_obj) { snap_dirty = true; return; }
+}
 
 // A plain shape (circle, ring): no theme style, never clickable, presses go to the parent
 static lv_obj_t *shape(lv_obj_t *parent, int size)
@@ -166,7 +174,7 @@ static lv_obj_t *shape(lv_obj_t *parent, int size)
 static void set_text(lv_obj_t *l, const char *s)
 {
     if (!strcmp(lv_label_get_text(l), s)) return;
-    snap_dirty = true;
+    mark_dirty(l);
     if (!outlined(l)) { lv_label_set_text(l, s); return; }
     lv_obj_t *box = lv_obj_get_parent(l);        // the outline copies too
     for (uint32_t i = 0; i < lv_obj_get_child_count(box); i++) lv_label_set_text(lv_obj_get_child(box, i), s);
@@ -175,7 +183,7 @@ static void set_text(lv_obj_t *l, const char *s)
 static void set_hidden(lv_obj_t *o, bool hidden)
 {
     if (outlined(o)) o = lv_obj_get_parent(o);    // the whole outlined text
-    if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != hidden) snap_dirty = true;
+    if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != hidden) mark_dirty(o);
     if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != hidden) {
         if (hidden) lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -213,12 +221,12 @@ static void pick_update(void)
     uint32_t v = rgb(c->r, c->g, c->b), b2 = cfg_b2(c);
     if (v != pick_shown_rgb) {
         pick_shown_rgb = v;
-        snap_dirty = true;
+        mark_dirty(pg_pick);
         for (int i = 0; i < SW_N; i++) lv_obj_set_style_outline_width(p_sw[i], sw_rgb[i] == v ? 3 : 0, 0);
     }
     if (b2 != pick_shown_b2) {
         pick_shown_b2 = b2;
-        snap_dirty = true;
+        mark_dirty(pg_pick);
         for (int i = 0; i < SW_N; i++) set_hidden(p_dot[i], !b2 || sw_rgb[i] != (b2 & 0xFFFFFF));
     }
 }
@@ -651,7 +659,7 @@ static void game_update(void)
         g.n == glast.n && !memcmp(peers, glast.peers, sizeof(peers)))
         return;
     glast.phase = g.phase;
-    snap_dirty = true;
+    mark_dirty(pg_game);
     glast.own = g.own;
     glast.word = word;
     glast.outcome = g.outcome;
@@ -815,7 +823,7 @@ static void voice_update(void)
         return;
     vlast.phase = cs.phase, vlast.tenths = tenths, vlast.pct = cs.send_pct, vlast.recv = cs.receiving;
     vlast.own = own;
-    snap_dirty = true;
+    mark_dirty(pg_voice);
 
     bool rec = cs.phase == CLIP_REC, sending = cs.phase == CLIP_SENDING;
     lv_obj_set_style_border_color(v_ring, lv_color_hex(own), 0);
@@ -1019,20 +1027,22 @@ static uint8_t *snap_mem;
 static bool snap_ok;                          // the picture is of the page being drawn
 static int snap_page = -1;
 static int64_t snap_at;
-static struct { uint16_t x0, x1; } snap_span[WAVE_H];   // per row, where the picture is not transparent
+/* The picture compiled for the paste (layer_build: opaque segments copied, edge pixels blended), in PSRAM. Each row's
+ * runs through layer_over cost ~5 ms a frame on pick and voice (37-39 fps, v0.7.1-smooth.3). A picture too big for
+ * the arrays falls back to layer_over over whole rows (slow, still right). */
+#define LAYER_SEGS 20000
+#define LAYER_EDGES 60000
+#define LAYER_PIX 120000
+static layer_t lay;
+static bool lay_ok;
 
-// The picture over rows [y0, y0+n) of a band: only each row's span (most of a page is the background)
 static void snap_over(uint16_t *dst, int y0, int n)
 {
-    for (int r = 0; r < n; r++) {
-        int y = y0 + r;
-        if (y < 0 || y >= WAVE_H || snap_span[y].x1 <= snap_span[y].x0) continue;
-        int x0 = snap_span[y].x0;
-        layer_over(dst + (size_t)r * WAVE_W + x0, snap.data + (size_t)y * snap.header.stride + (size_t)x0 * 4,
-                   snap_span[y].x1 - x0);
-    }
+    if (lay_ok) { layer_draw(&lay, dst, y0, n, WAVE_W); return; }
+    for (int r = 0; r < n; r++)
+        if (y0 + r >= 0 && y0 + r < WAVE_H)
+            layer_over(dst + (size_t)r * WAVE_W, snap.data + (size_t)(y0 + r) * snap.header.stride, WAVE_W);
 }
-
 void ui_wave_layer(uint16_t *band, int y0, int n)
 {
     if (snap_ok) snap_over(band, y0, n);
@@ -1043,6 +1053,8 @@ static struct {                               // since the loop started drawing
     uint32_t frames, fill_max, frame_max;
     uint64_t fill_sum, frame_sum;
     int64_t t_first, t_last;                  // first and last frame's start
+    int64_t t_end;                            // the last frame's end (display_raw_frame returned)
+    uint64_t gap_sum, pre_sum;                // outside the loop between frames; in wave_tick before the push
 } wl;
 
 /* Tearing (rc.12-rc.13): a frame started on the refresh's edge had to outrun the scan (~0.6 ms of margin); the slower
@@ -1066,6 +1078,8 @@ static void wave_stop(const char *why)
                  (unsigned long)wl.frames, wl.fill_sum / 1000.0f / wl.frames, wl.fill_max / 1000.0f,
                  wl.frame_sum / 1000.0f / wl.frames, wl.frame_max / 1000.0f,
                  wl.frames > 1 && span > 0 ? (wl.frames - 1) / span : 0.0f, why);
+        ESP_LOGI("display", "wave loop: between frames avg %.1f ms, before the push avg %.1f ms",
+                 wl.frames > 1 ? wl.gap_sum / 1000.0f / (wl.frames - 1) : 0.0f, wl.pre_sum / 1000.0f / wl.frames);
     }
     memset(&wl, 0, sizeof(wl));
     if (snap_page >= 0) {                     // back to LVGL: the page's disc, its redraws
@@ -1075,6 +1089,7 @@ static void wave_stop(const char *why)
     }
     snap_ok = false;
     snap_page = -1;
+    snap_obj = NULL;
     if (lv_screen_active() == scr_pager) main_update(false);
     lv_obj_invalidate(lv_screen_active());    // LVGL's frame is still main's: a full repaint over the last wave frame
 }
@@ -1098,6 +1113,7 @@ static void snap_take(int page)
         if (snap_page < 0) lv_display_enable_invalidation(NULL, false);
         if (bgd[page]) lv_obj_add_flag(bgd[page], LV_OBJ_FLAG_HIDDEN);
         snap_page = page;
+        snap_obj = pager_page(pager, page);
     }
     int64_t t0 = esp_timer_get_time();
     snap_dirty = false;
@@ -1106,16 +1122,21 @@ static void snap_take(int page)
     snap_ok = snap_mem && lv_snapshot_take_to_draw_buf(pager_page(pager, page), LV_COLOR_FORMAT_ARGB8888, &snap)
                           == LV_RESULT_OK;
     if (ring) lv_obj_remove_flag(ring, LV_OBJ_FLAG_HIDDEN);
-    for (int y = 0; snap_ok && y < WAVE_H; y++) {   // each row's span of visible pixels
-        const uint8_t *row = snap.data + (size_t)y * snap.header.stride;
-        int x0 = 0, x1 = WAVE_W;
-        while (x0 < WAVE_W && !row[x0 * 4 + 3]) x0++;
-        while (x1 > x0 && !row[(x1 - 1) * 4 + 3]) x1--;
-        snap_span[y].x0 = (uint16_t)x0;
-        snap_span[y].x1 = (uint16_t)x1;
+    if (snap_ok && !lay.seg) {
+        lay.seg = heap_caps_malloc(LAYER_SEGS * sizeof(layer_seg_t), MALLOC_CAP_SPIRAM);
+        lay.edge = heap_caps_malloc(LAYER_EDGES * sizeof(layer_edge_t), MALLOC_CAP_SPIRAM);
+        lay.pix = heap_caps_malloc(LAYER_PIX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        lay.max_seg = lay.seg ? LAYER_SEGS : 0;
+        lay.max_edge = lay.edge ? LAYER_EDGES : 0;
+        lay.max_pix = lay.pix ? LAYER_PIX : 0;
     }
+    lay_ok = snap_ok && layer_build(&lay, snap.data, WAVE_W, WAVE_H, snap.header.stride);
+    if (snap_ok && !lay_ok) ESP_LOGW(TAG, "page picture too big to compile (%lu segments, %lu edges, %lu pixels): slow paste",
+                                     (unsigned long)lay.nseg, (unsigned long)lay.nedge, (unsigned long)lay.npix);
     snap_at = esp_timer_get_time();
-    if (wl.frames == 0) ESP_LOGI("display", "wave page %s, picture %lld ms", page_name[page], (snap_at - t0) / 1000);
+    if (wl.frames == 0) ESP_LOGI("display", "wave page %s, picture %lld ms (%lu segments, %lu edges, %lu pixels)",
+                                 page_name[page], (snap_at - t0) / 1000, (unsigned long)lay.nseg, (unsigned long)lay.nedge,
+                                 (unsigned long)lay.npix);
 }
 
 static void wave_tick(lv_timer_t *t)
@@ -1133,7 +1154,8 @@ static void wave_tick(lv_timer_t *t)
     int64_t t0 = esp_timer_get_time();
     if (!wl.drawing) { wl.drawing = true; wl.t_first = t0; }
     if (page != PG_MAIN) {
-        bool busy = touch_idle_ms() < 1000;
+        bool busy = lv_display_get_inactive_time(NULL) < 1000;   // LVGL's last input: free (touch_idle_ms() read the
+                                                                 // chip, 2-3.5 ms a frame: uneven frames, smooth.6)
         if (page == PG_GAME) {
             static mesh_game_t g;
             mesh_game_state(&g);
@@ -1151,7 +1173,10 @@ static void wave_tick(lv_timer_t *t)
     wf.rg = c->g;
     wf.rb = c->b;
     wf.fill_us = 0;
+    if (wl.t_end) wl.gap_sum += t0 - wl.t_end;
+    wl.pre_sum += esp_timer_get_time() - t0;
     display_raw_frame(wave_band, NULL);       // filled band by band while sent; started behind the scan (rawchase)
+    wl.t_end = esp_timer_get_time();
     uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
     wl.frames++;
     wl.fill_sum += wf.fill_us;

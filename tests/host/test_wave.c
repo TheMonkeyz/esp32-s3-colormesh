@@ -486,6 +486,47 @@ static void test_layer(void)
     CHECK(one == swapped(64, 0, 185), "a quarter red over blue: %04x", one);
 }
 
+// layer_build + layer_draw: the compiled picture gives exactly layer_over's frame (a page of opaque blocks, edges and
+// transparent gaps, over a gradient, drawn in bands), and a too-small array is refused, not overrun
+static void test_layer_compiled(void)
+{
+    enum { LW = 466, LH = 64 };
+    static uint8_t pic[LW * LH * 4];
+    static uint16_t ref[LW * LH], got[LW * LH];
+    srand(7);
+    for (int y = 0; y < LH; y++)
+        for (int x = 0; x < LW; x++) {
+            uint8_t *p = pic + ((size_t)y * LW + x) * 4;
+            int zone = (x / 37 + y / 9) % 4;             // blocks: transparent, opaque, edge, mixed
+            p[0] = (uint8_t)rand(), p[1] = (uint8_t)rand(), p[2] = (uint8_t)rand();
+            p[3] = zone == 0 ? 0 : zone == 1 ? 255 : zone == 2 ? (uint8_t)(1 + rand() % 254) : (uint8_t)(rand() % 3 * 127);
+            ref[y * LW + x] = got[y * LW + x] = swapped((uint8_t)x, (uint8_t)(y * 4), (uint8_t)(x ^ y));
+        }
+    static layer_seg_t seg[8000];
+    static layer_edge_t edge[20000];
+    static uint16_t pix[LW * LH];
+    static layer_t l;
+    l.seg = seg, l.edge = edge, l.pix = pix;
+    l.max_seg = 8000, l.max_edge = 20000, l.max_pix = LW * LH;
+    CHECK(layer_build(&l, pic, LW, LH, LW * 4), "built (%u segments, %u edges, %u pixels)", (unsigned)l.nseg,
+          (unsigned)l.nedge, (unsigned)l.npix);
+    for (int y = 0; y < LH; y++) layer_over(ref + y * LW, pic + (size_t)y * LW * 4, LW);
+    for (int y = 0; y < LH; y += 32) layer_draw(&l, got + y * LW, y, 32, LW);
+    int worst = 0, off = 0;                         // opaque and transparent: exact; edges: within a step
+    for (int i = 0; i < LW * LH; i++) {
+        uint16_t x = (uint16_t)(ref[i] << 8 | ref[i] >> 8), y = (uint16_t)(got[i] << 8 | got[i] >> 8);
+        int d = abs((x >> 11) - (y >> 11)) + abs(((x >> 5) & 63) - ((y >> 5) & 63)) + abs((x & 31) - (y & 31));
+        if (pic[i * 4 + 3] == 0 || pic[i * 4 + 3] == 255) off += d != 0;
+        else if (d > worst) worst = d;
+    }
+    CHECK(off == 0, "the compiled paste: %d opaque or transparent pixels differ", off);
+    CHECK(worst <= 3, "the compiled paste: edges within a step per channel (worst %d)", worst);
+    l.max_edge = 10;
+    CHECK(!layer_build(&l, pic, LW, LH, LW * 4) && l.nedge <= 10, "a too-small edge list is refused");
+    l.max_edge = 20000, l.max_pix = 100;
+    CHECK(!layer_build(&l, pic, LW, LH, LW * 4) && l.npix <= 100, "a too-small pixel array is refused");
+}
+
 int main(void)
 {
     test_uninitialised();
@@ -511,5 +552,6 @@ int main(void)
     test_timing();
     free(mem);
     test_layer();
+    test_layer_compiled();
     return check_done("wave");
 }

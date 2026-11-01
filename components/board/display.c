@@ -217,6 +217,7 @@ static void te_sync(bool on, bool chase, int y1, int y2, int rows, int w, uint32
     disp_phase = 9;
     uint32_t p = te_period_us, b = te_high_us, since = (uint32_t)t0 - te_rise_us;
     bool in_blank = te_state > 0 && gpio_get_level(PIN_TE) && since < b && since < 300;
+    if (in_blank && chase && chase_window) in_blank = false;   // a raw frame that chases: the window below, not the edge
     int64_t at = -1;                                     // chasing: start at this time
     if (!in_blank && chase && chase_window && te_state > 0 && p > 10000 && p < 25000 && b < p / 2 && since >= p - 500 &&
         since < p + p / 2) {

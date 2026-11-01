@@ -5,6 +5,11 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## Unreleased (feature/page-order, tested as v0.7.1-smooth.1-8) - 2026-11-01
+- Smooth waves behind the colour choice, voice and game pages too (about 50 frames a second, like the mesh page):
+  they no longer freeze for a moment every second.
+- Swipes with waves running stay smooth (about 60 frames a second).
+
 ## v0.6.0-rc.19 - 2026-11-01
 - The waves keep moving while you swipe between pages, and come back right after a swipe.
 - No more tearing in the waves; smoother waves (about 50 frames a second on the mesh page, 33-44 on the others).
