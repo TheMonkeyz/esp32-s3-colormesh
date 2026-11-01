@@ -5,6 +5,13 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.7.0-rc.1 - 2026-11-01
+- A phone joins the boards: the ColorMesh app for Android (download it from this page). Touch the circle to send
+  your colour, tap it for a wave, call the boards, answer their calls, and hold "Hold to talk" to send a voice
+  message (the boards play it about twice its length after you let go: Android sends slower than a board).
+- The boards keep a slow sender's colour steady: each advert now says how often it is sent, and a board waits three
+  of those before it drops a held colour (the phone sends every 100 ms, a board every 20 ms).
+
 ## v0.6.0-rc.8 - 2026-11-01
 - The first tagged build of the voice release: the same code as rc.7 (rc.1-rc.7 were test labels).
 - Voice clips: swipe to the last page ("Voice"), hold the screen and talk (up to 5 s), let go: every board in range
