@@ -70,6 +70,20 @@ static volatile bool refresh_req;
 static volatile uint32_t mix_packed;    // 0x00rrggbb of the last mix
 static volatile mesh_gap_hook_t gap_hook;
 
+// Waves (mesh_start_wave): the own effect bytes in the advert, the waves running here, the peers' last effect seen
+static volatile uint8_t own_effect, own_effect_seq, effect_kind_req;
+static volatile bool effect_req;
+static int64_t effect_clear_us;         // mesh task: when the effect bytes go back to 0 (0 = none pending)
+static wave_t waves[WAVE_MAX];          // under table_lock
+static bool waves_any;                  // under table_lock: a wave started and "mesh: wave end" is still to come
+static struct {
+    uint8_t addr[6], seq;
+    bool used, active;                  // active: an effect != 0 heard with this seq (a new seq or a new effect after
+                                        // an effect 0 starts a wave)
+    uint32_t last_ms;
+} eff[MP_MAX_PEERS];                    // mesh task only
+static const char *const wave_names[] = { "none", "centre", "left", "right", "top", "bottom" };
+
 static uint8_t adv_buf[MP_AD_SIZE];     // under radio_lock
 static uint8_t seq;                     // mesh task only
 static volatile bool adv_on, scan_on, adv_fallback;
@@ -256,6 +270,8 @@ static void do_refresh(void)
     s.b = own_b;
     memcpy(s.ver, own_ver, 4);
     s.target = target;
+    s.effect = own_effect;
+    s.effect_seq = own_effect_seq;
     bool h = holding;
     uint8_t buf[MP_AD_SIZE];
     xSemaphoreTake(table_lock, portMAX_DELAY);
@@ -326,6 +342,65 @@ static void after_change(void)
     }
 }
 
+// Over: started at or before now and no longer active (a wave started by another task just after `now` was read is
+// not over: its start is after now)
+static bool wave_over(const wave_t *w, uint32_t now)
+{
+    return w->kind == WAVE_NONE || ((int32_t)(now - w->start_ms) >= 0 && !wave_active(w, now));
+}
+
+// A wave starts here now (table_lock held): a free slot, else the one that started first
+static void wave_add_locked(uint8_t kind, uint8_t r, uint8_t g, uint8_t b, uint32_t now)
+{
+    int k = -1;
+    for (int i = 0; i < WAVE_MAX && k < 0; i++) if (wave_over(&waves[i], now)) k = i;
+    if (k < 0) {
+        k = 0;
+        for (int i = 1; i < WAVE_MAX; i++) if ((int32_t)(waves[i].start_ms - waves[k].start_ms) < 0) k = i;
+    }
+    waves[k] = (wave_t){ .kind = kind, .r = r, .g = g, .b = b, .start_ms = now };
+    waves_any = true;
+}
+
+// One decoded report: a peer's new effect starts its wave (receiver time, its colour)
+static void peer_effect(const uint8_t addr[6], const mp_state_t *st, uint32_t now)
+{
+    int k = -1, oldest = 0;
+    for (int i = 0; i < MP_MAX_PEERS; i++) {
+        if (eff[i].used && !memcmp(eff[i].addr, addr, 6)) { k = i; break; }
+        if (!eff[i].used) oldest = i;
+        else if (eff[oldest].used && (int32_t)(eff[i].last_ms - eff[oldest].last_ms) < 0) oldest = i;
+    }
+    if (k < 0) {
+        if (st->effect == WAVE_NONE) return;          // nothing to remember
+        k = oldest;
+        eff[k].used = true;
+        eff[k].active = false;
+        memcpy(eff[k].addr, addr, 6);
+    }
+    if (eff[k].active && now - eff[k].last_ms > 2 * MESH_EFFECT_MS) eff[k].active = false;   // a long gap: forget it
+    eff[k].last_ms = now;
+    char a[18];
+    if (st->effect == WAVE_NONE) {
+        if (eff[k].active) {
+            fmt_addr(a, sizeof(a), addr);
+            ESP_LOGD(TAG_BLE, "effect %s 0 (seq %u)", a, st->effect_seq);
+        }
+        eff[k].active = false;
+        return;
+    }
+    if (eff[k].active && eff[k].seq == st->effect_seq) return;
+    eff[k].active = true;
+    eff[k].seq = st->effect_seq;
+    fmt_addr(a, sizeof(a), addr);
+    ESP_LOGD(TAG_BLE, "effect %s %u (seq %u)", a, st->effect, st->effect_seq);
+    if (st->effect > WAVE_BOTTOM) return;             // a kind this build does not know
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    wave_add_locked(st->effect, st->r, st->g, st->b, now);
+    xSemaphoreGive(table_lock);
+    ESP_LOGI(TAG, "wave %s from %s", mesh_wave_name(st->effect), a);
+}
+
 static void mesh_task(void *arg)
 {
     const TickType_t period = pdMS_TO_TICKS(TICK_MS);
@@ -349,7 +424,15 @@ static void mesh_task(void *arg)
                 xSemaphoreTake(table_lock, portMAX_DELAY);
                 dirty |= mp_table_update(&table, r.addr, &st, r.rssi, now_ms());
                 xSemaphoreGive(table_lock);
+                peer_effect(r.addr, &st, now_ms());
             } while (xQueueReceive(q, &r, 0) == pdTRUE);
+        }
+        if (effect_req) {                                // mesh_start_wave: the effect into the advert, for 1 s
+            effect_req = false;
+            own_effect = effect_kind_req;
+            own_effect_seq++;
+            effect_clear_us = esp_timer_get_time() + MESH_EFFECT_MS * 1000LL;
+            refresh_req = true;
         }
         if (refresh_req) {
             refresh_req = false;
@@ -371,6 +454,25 @@ static void mesh_task(void *arg)
             int n = mp_table_expire(&table, now_ms());
             xSemaphoreGive(table_lock);
             if (n) dirty = true;
+            if (effect_clear_us && esp_timer_get_time() >= effect_clear_us) {   // the effect's second is over
+                effect_clear_us = 0;
+                own_effect = WAVE_NONE;
+                do_refresh();
+                dirty = true;
+            }
+            bool ended = false;
+            uint32_t t = now_ms();
+            xSemaphoreTake(table_lock, portMAX_DELAY);
+            if (waves_any) {
+                bool any = false;
+                for (int i = 0; i < WAVE_MAX; i++) {
+                    if (!wave_over(&waves[i], t)) any = true;
+                    else waves[i].kind = WAVE_NONE;
+                }
+                if (!any) waves_any = false, ended = true;
+            }
+            xSemaphoreGive(table_lock);
+            if (ended) ESP_LOGI(TAG, "wave end");
             radio_check();
             if (++ticks % (1000 / TICK_MS) == 0) {               // every second
                 uint32_t rep = n_reports, cm = n_cm;
@@ -615,6 +717,50 @@ int mesh_peers(mesh_peer_t *out, int max)
 const char *mesh_own_addr(void) { return own_addr; }
 
 bool mesh_holding(void) { return holding; }
+
+bool mesh_peer_holding(void)
+{
+    if (!table_lock) return false;
+    bool any = false;
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    for (int i = 0; i < MP_MAX_PEERS && !any; i++) any = table.peers[i].used && (table.peers[i].st.flags & MP_F_HOLDING);
+    xSemaphoreGive(table_lock);
+    return any;
+}
+
+const char *mesh_wave_name(uint8_t kind) { return kind <= WAVE_BOTTOM ? wave_names[kind] : "?"; }
+
+uint8_t mesh_wave_kind(const char *name)
+{
+    if (name && !strcmp(name, "center")) return WAVE_CENTRE;
+    for (uint8_t k = WAVE_NONE + 1; name && k <= WAVE_BOTTOM; k++) if (!strcmp(name, wave_names[k])) return k;
+    return WAVE_NONE;
+}
+
+void mesh_start_wave(uint8_t kind)
+{
+    if (kind == WAVE_NONE || kind > WAVE_BOTTOM || !table_lock) return;
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    wave_add_locked(kind, own_r, own_g, own_b, now_ms());   // here at once, in its own colour
+    xSemaphoreGive(table_lock);
+    ESP_LOGI(TAG, "wave %s from self", mesh_wave_name(kind));
+    effect_kind_req = kind;
+    effect_req = true;
+    wake();
+}
+
+int mesh_waves(wave_t *out, int max, uint32_t now_ms)
+{
+    if (!table_lock || !out || max <= 0) return 0;
+    int n = 0;
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    for (int i = 0; i < WAVE_MAX; i++) {
+        if (wave_over(&waves[i], now_ms)) { waves[i].kind = WAVE_NONE; continue; }
+        if (n < max && wave_active(&waves[i], now_ms)) out[n++] = waves[i];
+    }
+    xSemaphoreGive(table_lock);
+    return n;
+}
 
 uint8_t mesh_own_origin(void) { return own_origin; }
 

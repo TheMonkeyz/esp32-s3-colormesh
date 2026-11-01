@@ -12,12 +12,15 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
+#include "esp_timer.h"
 #include "testcon.h"
 #include "screens.h"
+#include "board.h"
 #include "config.h"
 #include "mesh.h"
 #include "mesh_fw.h"
 #include "ui.h"
+#include "wave.h"
 
 // driver/usb_serial_jtag.h: forge_core links the driver (testcon owns it) but only as a private dependency, and
 // main/CMakeLists.txt does not list esp_driver_usb_serial_jtag; the one function needed, as the driver declares it
@@ -163,6 +166,16 @@ static void cmd_hold(int argc, char **argv)
     ESP_LOGI(TAG, "ok hold %s", on ? "on" : "off");
 }
 
+// "wave centre|left|right|top|bottom": a wave of this board's colour here and on every board nearby, as a tap on main
+// does ("mesh: wave <kind> from self"; the main page draws it while it is shown: "display: wave frames ..." after)
+static void cmd_wave(int argc, char **argv)
+{
+    uint8_t k = argc == 2 ? mesh_wave_kind(argv[1]) : WAVE_NONE;
+    if (k == WAVE_NONE) { ESP_LOGW(TAG, "error wave: expected centre|left|right|top|bottom"); return; }
+    mesh_start_wave(k);
+    ESP_LOGI(TAG, "ok wave %s", mesh_wave_name(k));
+}
+
 // "9a", or a whole address "aa:bb:cc:dd:ee:9a": the origin id is the address's last (least significant) byte
 static void cmd_fwpull(int argc, char **argv)
 {
@@ -188,6 +201,8 @@ static void cmd_fwpull(int argc, char **argv)
  * "shot [screen] [div]": a screen (the registry's names; default "shown", the one on the display) sent over USB as
  * base64 RGB565, every div-th pixel of every div-th row (div 1..4, default 2): "SHOT name w h", one "S:" line per
  * row, "SHOTEND". tools/shot.py turns a log into PNGs. From esp32-s3-meteobus (port/esp32-p4, main/console.c).
+ * "shot wave [div]": the wave frame the main page shows now (the screens' snapshot is LVGL's page, not the raw frames
+ * a wave is drawn with), computed by the same wave_fill with the same inputs as ui.c's wave loop.
  * Straight to the USB driver (testcon's): through the log it would take far longer. */
 static void usb_line(const char *s, size_t n)
 {
@@ -215,8 +230,33 @@ static void shot_task(void *arg)
         if (strcmp(cur, "other") && strcmp(cur, "busy")) strlcpy(name, cur, sizeof(name));
     }
     web_image_t img = { 0 };
-    bool got = screens_snapshot(strcmp(name, "shown") ? name : "current", &img);
-    if (!got || !img.data) {
+    uint16_t *wave_px = NULL;
+    bool got;
+    if (!strcmp(name, "wave")) {
+        static wave_t ws[WAVE_MAX];
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        int nw = mesh_waves(ws, WAVE_MAX, now);
+        wave_px = nw > 0 ? heap_caps_malloc((size_t)DISP_W * DISP_H * 2, MALLOC_CAP_SPIRAM) : NULL;
+        if (wave_px) {
+            uint8_t hr, hg, hb;
+            mesh_get_mix(&hr, &hg, &hb);
+            const app_cfg_t *c = config_get();
+            bool hold = mesh_holding() || mesh_peer_holding();
+            display_lock(-1);                             // wave_fill is not reentrant: the wave loop holds this lock
+            for (int y = 0; y < DISP_H; y += 32)
+                wave_fill(wave_px + (size_t)y * DISP_W, y, DISP_H - y < 32 ? DISP_H - y : 32, ws, nw, now, hr, hg, hb,
+                          hold, c->r, c->g, c->b);
+            display_unlock();
+            for (size_t i = 0; i < (size_t)DISP_W * DISP_H; i++)   // panel order -> RGB565 little-endian
+                wave_px[i] = (uint16_t)(wave_px[i] << 8 | wave_px[i] >> 8);
+            img = (web_image_t){ .data = (const uint8_t *)wave_px, .w = DISP_W, .h = DISP_H, .stride = DISP_W * 2 };
+            ESP_LOGI(TAG, "shot wave: %d wave(s) at %lu ms", nw, (unsigned long)now);
+        }
+        got = false;                                      // nothing for screens_snapshot_free
+    } else {
+        got = screens_snapshot(strcmp(name, "shown") ? name : "current", &img);
+    }
+    if (!img.data) {
         ESP_LOGW(TAG, "error shot %s: no picture", name);
         if (got) screens_snapshot_free(&img);
         shot_busy = false;
@@ -254,7 +294,8 @@ static void shot_task(void *arg)
     }
     free(row);
     free(line);
-    screens_snapshot_free(&img);                          // lv_draw_buf_destroy under the display lock
+    if (got) screens_snapshot_free(&img);                 // lv_draw_buf_destroy under the display lock
+    free(wave_px);
     if (row && line) ESP_LOGI(TAG, "ok shot %s %dx%d", name, w, h);
     else ESP_LOGW(TAG, "error shot %s: no memory", name);
     shot_busy = false;
@@ -285,4 +326,5 @@ void console_init(void)
     testcon_register("hold", "hold on|off", cmd_hold);
     testcon_register("shot", "shot [screen] [div]", cmd_shot);
     testcon_register("fwpull", "fwpull ADDR|ORIGIN", cmd_fwpull);
+    testcon_register("wave", "wave centre|left|right|top|bottom", cmd_wave);
 }

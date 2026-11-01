@@ -703,6 +703,53 @@ class AppSuites(unittest.TestCase):
         self.assertIn('only after "ui: page system"', str(e.exception))
 
 
+class WaveTap(unittest.TestCase):
+    """mesh.wave_tap: a tap at the centre of main -> ui and mesh wave lines within 1 s, the frame line >= 20 fps."""
+    END = 'I (14100) display: wave frames 118, fill avg 14.2 max 16.0 ms, frame avg 26.0 max 31.5 ms, 29.4 fps (end)'
+
+    def run_tap(self, after_tap):
+        b = FakePager()
+        b.at = 1
+        real = b.cmd
+
+        def cmd(line, expect=None, **kw):
+            r = real(line, expect, **kw)
+            if line.startswith('tap '):
+                b.log.data += after_tap
+            return r
+        b.cmd = cmd
+        b.tap = lambda x, y: b.cmd(f'tap {x} {y}')
+        return b, AppSuites.run_nav(self, app_suites.wave_tap, b)
+
+    def test_parser(self):
+        v = app_suites.wave_stats(self.END)
+        self.assertEqual((v['frames'], v['fill_avg'], v['frame_max'], v['fps'], v['why']), (118, 14.2, 31.5, 29.4, 'end'))
+        self.assertIsNone(app_suites.wave_stats('I (1) display: frame 12.0 + 9.0 ms'))
+
+    def test_passes(self):
+        b, ctx = self.run_tap(['I (10010) ui: wave centre at 233,233', 'I (10011) mesh: wave centre from self', self.END])
+        self.assertIn('tap 233 233', b.sent)
+        self.assertIn('29.4 fps', ctx.notes[0])
+
+    def test_no_wave_from_the_tap_fails(self):
+        # the old firmware: a tap on main is only a short hold
+        with self.assertRaises(Fail) as e:
+            self.run_tap(['I (10000) mesh: hold on', 'I (10120) mesh: hold off'])
+        self.assertIn('ui: wave centre', str(e.exception))
+
+    def test_slow_frames_fail(self):
+        with self.assertRaises(Fail) as e:
+            self.run_tap(['I (10010) ui: wave centre at 233,233', 'I (10011) mesh: wave centre from self',
+                          self.END.replace('29.4 fps', '12.5 fps')])
+        self.assertIn('12.5 fps', str(e.exception))
+
+    def test_a_paused_wave_fails(self):
+        with self.assertRaises(Fail) as e:
+            self.run_tap(['I (10010) ui: wave centre at 233,233', 'I (10011) mesh: wave centre from self',
+                          self.END.replace('(end)', '(paused)')])
+        self.assertIn('paused', str(e.exception))
+
+
 class LogWaits(unittest.TestCase):
     def test_ready_line_found_after_start_logs_wait(self):
         # "console ready" lost in the first 2.5 s: start_log's wait stops on the ready line itself and moves the read

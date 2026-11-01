@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "wave.h"
 
 // The Bluetooth LE mesh: every board advertises its state (colour, holding, dev mode, version) and scans for the
 // others' (docs/RESEARCH-BLE.md). Any task may call these.
@@ -24,6 +25,19 @@ void mesh_get_mix(uint8_t *r, uint8_t *g, uint8_t *b);  // the mix of every hold
 int mesh_peers(mesh_peer_t *out, int max);              // the peers heard, up to max; returns the count
 const char *mesh_own_addr(void);                        // "aa:bb:cc:dd:ee:ff" (most significant first), "" before sync
 bool mesh_holding(void);
+bool mesh_peer_holding(void);                           // any peer heard holding
+
+// ---- waves (docs/IDEAS.md "Animations over the mesh") ----
+// Starts a wave of this board's colour (kind: WAVE_CENTRE..WAVE_BOTTOM) here at once ("mesh: wave <kind> from self")
+// and on every board nearby: the advert carries effect = kind and a bumped effect_seq for MESH_EFFECT_MS, then
+// effect 0 again. A peer's report with a new (effect != 0, effect_seq) starts its wave here at the time it is heard
+// ("mesh: wave <kind> from <addr>"). Any task; no radio work in the caller (the mesh task re-advertises).
+#define MESH_EFFECT_MS 1000
+void mesh_start_wave(uint8_t kind);
+// The active waves (own and peers'), up to max; expired ones are dropped. "mesh: wave end" when the last one ends.
+int mesh_waves(wave_t *out, int max, uint32_t now_ms);
+const char *mesh_wave_name(uint8_t kind);               // "centre", "left", "right", "top", "bottom", "?"
+uint8_t mesh_wave_kind(const char *name);               // the reverse; WAVE_NONE for anything else
 
 // ---- radio control for the dev-mode firmware pull (mesh_fw.c). Call from a task, never from a touch/LVGL
 // handler: these talk to NimBLE directly (or wake the mesh task, which does). ----

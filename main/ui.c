@@ -4,6 +4,7 @@
 #include "ui.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -17,6 +18,7 @@
 #include "config.h"
 #include "mesh.h"
 #include "mesh_fw.h"
+#include "wave.h"
 
 static const char *TAG = "ui";
 
@@ -42,6 +44,8 @@ static const char *TAG = "ui";
 #define SW_RING    180
 #define SYS_ROWS   6                          // system: peers listed
 #define HOLD_IDLE_MS 150                      // safety net: no finger for this long = released
+#define TAP_CENTRE_R 100                      // main: a tap this close to the centre starts rings, else bands
+#define WAVE_PERIOD_MS 33                     // the wave loop: up to 30 fps
 
 extern const uint8_t ttf_start[] asm("_binary_montserrat_ttf_start");
 extern const uint8_t ttf_end[]   asm("_binary_montserrat_ttf_end");
@@ -56,6 +60,7 @@ static lv_obj_t *mn_ring, *mn_disc, *mn_arc, *mn_hint, *mn_near, *mn_dev, *mn_do
 static lv_obj_t *s_title, *s_lines, *s_peers, *s_row[SYS_ROWS], *s_sw[SYS_ROWS];
 static lv_obj_t *m_title, *m_body;
 static bool ui_hold;                          // the finger on the main page started a hold (not the console)
+static bool page_shown(int page);
 
 // Hue 0 = red at the top, clockwise every 30 degrees, full saturation
 static const uint32_t sw_rgb[SW_N] = {
@@ -300,9 +305,28 @@ static void drag_started(lv_obj_t *pg, void *user)
     hold_set(false);
 }
 
+// A tap (not a hold: LVGL sends no SHORT_CLICKED after a long press) starts a wave: within TAP_CENTRE_R of the
+// centre rings from the centre, else bands from the side tapped (four quadrants by the angle from the centre). The
+// tap's own press was a hold for as long as the finger was down; RELEASED ended it before this.
+static void main_tapped(lv_event_t *e)
+{
+    if (!slide_tap_ok() || !page_shown(PG_MAIN)) return;
+    lv_indev_t *in = lv_indev_active();
+    if (!in) return;
+    lv_point_t p;
+    lv_indev_get_point(in, &p);
+    int dx = p.x - CX, dy = p.y - CY;
+    uint8_t kind = dx * dx + dy * dy <= TAP_CENTRE_R * TAP_CENTRE_R ? WAVE_CENTRE
+                 : abs(dx) >= abs(dy) ? (dx < 0 ? WAVE_LEFT : WAVE_RIGHT)
+                 : (dy < 0 ? WAVE_TOP : WAVE_BOTTOM);
+    ESP_LOGI(TAG, "wave %s at %d,%d", mesh_wave_name(kind), (int)p.x, (int)p.y);
+    mesh_start_wave(kind);                    // flags for the mesh task; the wave loop below draws it
+}
+
 static void main_create_page(lv_obj_t *pg)
 {
     lv_obj_add_flag(pg, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(pg, main_tapped, LV_EVENT_SHORT_CLICKED, NULL);
     lv_obj_add_event_cb(pg, main_pressed, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(pg, main_released, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(pg, main_released, LV_EVENT_PRESS_LOST, NULL);
@@ -428,6 +452,82 @@ static void system_create_page(lv_obj_t *pg)
     system_refresh();
 }
 
+/* ---------- the wave loop ----------
+ * While mesh_waves() has a wave and main is the page shown with no slide running (slide_tap_ok), the screen is a
+ * raw frame (display_raw_frame, tear-free like the slides) filled by wave_fill, up to 30 fps, from an LVGL timer: in
+ * the LVGL task with the display lock held, like slide.c's moves, so a swipe's drag (queued from the touch read)
+ * runs between two frames and the loop pauses for it. Main's objects stay as they are (not updated meanwhile: an
+ * LVGL redraw would paint over the wave); when the loop stops, LVGL repaints the page. "display: wave frames ..." at
+ * every stop: the fill time (wave_fill alone, all bands) and the whole frame (fill overlapped with the bus, TE wait). */
+static void *wave_mem;                        // wave_init's table (PSRAM)
+static bool wave_ok;                          // the table was allocated (or none is needed)
+static struct {                               // the frame being filled (wave_band)
+    wave_t w[WAVE_MAX];
+    int n;
+    uint32_t now;
+    uint8_t hr, hg, hb, rr, rg, rb;
+    bool hold;
+    uint32_t fill_us;
+} wf;
+static struct {                               // since the loop started drawing
+    bool drawing;
+    uint32_t frames, fill_max, frame_max;
+    uint64_t fill_sum, frame_sum;
+    int64_t t_first, t_last;                  // first and last frame's start
+} wl;
+
+static void wave_band(int y0, int n, void *dst, void *user)
+{
+    int64_t t0 = esp_timer_get_time();
+    wave_fill(dst, y0, n, wf.w, wf.n, wf.now, wf.hr, wf.hg, wf.hb, wf.hold, wf.rr, wf.rg, wf.rb);
+    wf.fill_us += (uint32_t)(esp_timer_get_time() - t0);
+}
+
+static void wave_stop(const char *why)
+{
+    if (wl.frames) {
+        float span = (wl.t_last - wl.t_first) / 1e6f;
+        ESP_LOGI("display", "wave frames %lu, fill avg %.1f max %.1f ms, frame avg %.1f max %.1f ms, %.1f fps (%s)",
+                 (unsigned long)wl.frames, wl.fill_sum / 1000.0f / wl.frames, wl.fill_max / 1000.0f,
+                 wl.frame_sum / 1000.0f / wl.frames, wl.frame_max / 1000.0f,
+                 wl.frames > 1 && span > 0 ? (wl.frames - 1) / span : 0.0f, why);
+    }
+    memset(&wl, 0, sizeof(wl));
+    if (lv_screen_active() == scr_pager) main_update(false);
+    lv_obj_invalidate(lv_screen_active());    // LVGL's frame is still main's: a full repaint over the last wave frame
+}
+
+static void wave_tick(lv_timer_t *t)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    int n = wave_ok ? mesh_waves(wf.w, WAVE_MAX, now) : 0;
+    if (n <= 0 || !page_shown(PG_MAIN) || !slide_tap_ok()) {
+        if (wl.drawing) wave_stop(n > 0 ? "paused" : "end");
+        return;
+    }
+    display_lock(-1);                         // already held in the LVGL task (recursive)
+    int64_t t0 = esp_timer_get_time();
+    if (!wl.drawing) { wl.drawing = true; wl.t_first = t0; }
+    wl.t_last = t0;
+    wf.n = n;
+    wf.now = now;
+    mesh_get_mix(&wf.hr, &wf.hg, &wf.hb);
+    wf.hold = mesh_holding() || mesh_peer_holding();
+    const app_cfg_t *c = config_get();
+    wf.rr = c->r;
+    wf.rg = c->g;
+    wf.rb = c->b;
+    wf.fill_us = 0;
+    display_raw_frame(wave_band, NULL);
+    uint32_t us = (uint32_t)(esp_timer_get_time() - t0);
+    wl.frames++;
+    wl.fill_sum += wf.fill_us;
+    wl.frame_sum += us;
+    if (wf.fill_us > wl.fill_max) wl.fill_max = wf.fill_us;
+    if (us > wl.frame_max) wl.frame_max = us;
+    display_unlock();
+}
+
 /* ---------- timers ---------- */
 
 // Every 50 ms: the main page's values (only what changed is touched), the pick outline, the hold safety net. A hold
@@ -441,7 +541,7 @@ static void fast_tick(lv_timer_t *t)
         ESP_LOGI(TAG, "hold released (no finger for %lu ms, or the page changed)", (unsigned long)touch_idle_ms());
         hold_set(false);
     }
-    if (on_pager) {                           // every page: a swipe shows a picture of the neighbours
+    if (on_pager && !wl.drawing) {            // every page: a swipe shows a picture of the neighbours (not during a wave)
         main_update(false);
         pick_update();
     }
@@ -531,6 +631,17 @@ static const screen_def_t screens[] = {
 
 void ui_init(void)
 {
+    // The wave table first, without the display lock: its init took 549 ms (v0.1.0-1-gwave), LVGL blocked meanwhile
+    size_t wb = wave_table_bytes();
+    wave_mem = wb ? heap_caps_malloc(wb, MALLOC_CAP_SPIRAM) : NULL;
+    wave_ok = !wb || wave_mem;
+    if (wave_ok) {
+        int64_t w0 = esp_timer_get_time();
+        wave_init(wave_mem);
+        ESP_LOGI(TAG, "wave table %u KB, init %lld ms", (unsigned)(wb / 1024), (esp_timer_get_time() - w0) / 1000);
+    } else {
+        ESP_LOGE(TAG, "no memory for the wave table (%u bytes): no waves", (unsigned)wb);
+    }
     display_lock(-1);
     f_mid = mkfont(30);
     f_small = mkfont(20);
@@ -544,6 +655,7 @@ void ui_init(void)
     slide_set_drag_hook(drag_started, NULL);
     lv_timer_create(fast_tick, 50, NULL);
     lv_timer_create(slow_tick, 1000, NULL);
+    lv_timer_create(wave_tick, WAVE_PERIOD_MS, NULL);
     display_unlock();
 }
 

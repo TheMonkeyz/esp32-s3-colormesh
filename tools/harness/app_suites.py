@@ -210,6 +210,41 @@ def mix_self(ctx):
     ctx.note(f'own colour #ff0000 held alone: mix #ff0000 n=1 at {log_ms(m.string)} ms; the colour {saved} put back')
 
 
+WAVE_FPS_MIN = 20                                      # a wave on main: frames per second, at least
+WAVE_LINE = (r'display: wave frames (\d+), fill avg ([\d.]+) max ([\d.]+) ms, frame avg ([\d.]+) max ([\d.]+) ms, '
+             r'([\d.]+) fps \((\w+)\)')
+
+
+def wave_stats(line):
+    """`display: wave frames N, fill avg A max B ms, frame avg C max D ms, F fps (end|paused)` (ui.c's wave loop, at
+    each stop) -> dict, or None for another line."""
+    m = re.search(WAVE_LINE, line)
+    if not m:
+        return None
+    return {'frames': int(m.group(1)), 'fill_avg': float(m.group(2)), 'fill_max': float(m.group(3)),
+            'frame_avg': float(m.group(4)), 'frame_max': float(m.group(5)), 'fps': float(m.group(6)),
+            'why': m.group(7)}
+
+
+@test('mesh')
+def wave_tap(ctx):
+    """A tap at the centre of main starts a centre wave (`ui: wave centre at 233,233`, then `mesh: wave centre from
+    self`, both within 1 s); the main page draws it as raw frames and, when it ends (WAVE_DURATION_MS, 4 s), logs
+    `display: wave frames ...` with at least WAVE_FPS_MIN fps (within 5 s of the tap)."""
+    b = ctx.board
+    go_home(ctx)
+    at = len(ctx.log.lines())
+    b.tap(*SCREEN_C)
+    ui = ctx.log.wait(r'ui: wave centre at \d+,\d+', 1, 'the tap at the centre taken as a wave', start=at)
+    ctx.log.wait(r'mesh: wave centre from self', 1, 'the mesh starting the own wave', start=at)
+    m = ctx.log.wait(WAVE_LINE, 5, "the wave loop's frame line at the end of the wave", start=at)
+    v = wave_stats(m.string)
+    check(v['why'] == 'end', f'the wave stopped before its end ({v["why"]}): {m.string.strip()}')
+    check(v['fps'] >= WAVE_FPS_MIN, f'wave at {v["fps"]:.1f} fps (at least {WAVE_FPS_MIN}): {m.string.strip()}')
+    ctx.note(f'tap at the centre -> {ui.group(0)}; {v["frames"]} frames at {v["fps"]:.1f} fps, fill avg '
+             f'{v["fill_avg"]:.1f} max {v["fill_max"]:.1f} ms, frame avg {v["frame_avg"]:.1f} max {v["frame_max"]:.1f} ms')
+
+
 # ---------------------------------------------------------------- perf
 
 def measure(ctx, name, action, settle=1.0):
