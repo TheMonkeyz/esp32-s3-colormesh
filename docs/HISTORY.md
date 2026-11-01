@@ -95,3 +95,12 @@ the only knob that matters (100 ms 22 KB/s, 50 ms 40, 30 ms 52, none 75); advert
 length and the order of the link procedures do nothing. Shipped: 30 ms of scan per 100 ms while serving.
 Full pulls of the rc.5 image (1,136,224 bytes) read on the sender: to B in 20.9 s (52.9 KB/s, stream 53.4, 0 resent, window wait 156 ms), to C in 22.1 s (50.1 KB/s, 0 resent), with `mesh: peer` lines from the third board arriving during both transfers; C's first attempt lost the link at 676 KB (the peer dropped out, cause not visible from A) and succeeded 30 s later. Labels rc.2 to rc.4 were used up by test builds the boards pulled (rc.2 by another agent's display
 work, rc.3 and rc.4 by two pulls that completed before the probe knob was set), so the release candidate is rc.5.
+
+## 2026-10-31, evening: rc.5 to rc.7
+
+Tear-free display (TE on GPIO13, full PSRAM frame, pushes right after the tear pulse; rc.2 test label, in rc.5+),
+dev mode on by default, pull rate 22 -> 52 KB/s (the sender scans 30 ms of 100 while serving; rc.5), the colour ring as
+the pager's first page (swipe right from main; rc.6), a swipe no longer sends a hold (drag-start hook in a local
+forge_lvgl copy; rc.7). rc.7 flashed on A by USB; B and C pulled it over Bluetooth 3 s after A's boot, 21 s each at
+52 KB/s, 0 resent. Harness 15/15.
+
