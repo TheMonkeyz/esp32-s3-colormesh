@@ -679,6 +679,12 @@ class AppSuites(unittest.TestCase):
         self.assertEqual(app_suites.swipe_hold(lines, 'system'), (21, True))
         self.assertLessEqual(21, app_suites.SWIPE_HOLD_MS)
         self.assertGreater(440 - 200, app_suites.SWIPE_HOLD_MS)
+        # the slowest right swipe measured on v0.4.0 and v0.7.0 (a full redraw at touch down) passes
+        slow = ['I (10000) mesh: hold on', 'I (10109) ui: hold released (drag)', 'I (10109) mesh: hold off',
+                'I (10300) ui: page pick']
+        gap, before = app_suites.swipe_hold(slow, 'pick')
+        self.assertTrue(before)
+        self.assertLessEqual(gap, app_suites.SWIPE_HOLD_MS)
 
     def run_swipes(self, old):
         b = FakePager()

@@ -56,7 +56,7 @@ bug teaches something general; add the project-specific fact below.
 - **ESP-IDF v5.5.4** at `C:\Espressif\esp-idf` (CI uses the same version, from `forge.json` `idf`). In PowerShell:
   `. C:\Espressif\esp-idf\export.ps1`, then
   `idf.py -B build\v55 -D SDKCONFIG=build\v55\sdkconfig build`. The framework comes from espforge at a tag
-  (`main/idf_component.yml`, v0.7.0-rc.2: forge_core, forge_lvgl, forge_audio, the board); delete `dependencies.lock`
+  (`main/idf_component.yml`, v0.7.0: forge_core, forge_lvgl, forge_audio, the board); delete `dependencies.lock`
   when bumping it. From the Claude desktop app's
   shells, `%LOCALAPPDATA%` is redirected into the app's package folder and the component manager's git fetch fails
   ("'git init --bare' failed ... unable to get current working directory"): set
