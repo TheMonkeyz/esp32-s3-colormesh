@@ -194,6 +194,27 @@ build/v55 && python tools/make_flasher_site.py site --stable dist && python -m h
 Chrome at `http://localhost:8000/` with a board on USB and the flash helper stopped (it holds the port): Connect,
 read, change the colour, see the ring change.
 
+## 7b. The Android app (`android/`)
+
+Tools on this PC (2026-11-01): Temurin JDK 17 (`C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot`), the
+Android SDK in `%USERPROFILE%\AppData\Local\Android\Sdk` (platform 35, build tools, `platform-tools\adb.exe`),
+no Android Studio. In PowerShell, from `android/`:
+
+- `$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot"; .\gradlew.bat test assembleDebug`:
+  the JVM tests (`app/src/test`: the protocol, mix, expiry, ADPCM, CRC and chunks against `tests/fixtures/*.txt`,
+  calls, waves, ring length) and `app/build/outputs/apk/debug/app-debug.apk` (`ca.themonkeyz.colormesh.debug`, beside
+  a release install).
+- The phone (wireless debugging, paired once with `adb pair <ip:port> <code>`; `adb mdns services` shows the ports):
+  `adb connect <ip:port>`, `adb -s <ip:port> install -r app-debug.apk`, `adb shell pm grant
+  ca.themonkeyz.colormesh.debug android.permission.BLUETOOTH_SCAN` (and `BLUETOOTH_ADVERTISE`, `RECORD_AUDIO`),
+  `adb logcat -s colormesh`: `advertising 100 ms`, `peers=N holders=N sent=N heard=N` every 10 s, `advert origin=..
+  seq=.. hold=.. rgb=.. effect=../..` per change, `ring from`, `answer from`, `wave k from`, `clip N: ms, bytes,
+  packets`, `clip sent ok=true packets=n/n refused=0`.
+- A tap or a hold from the PC: `adb shell input tap X Y`, `adb shell input swipe X Y X Y 2000` (a 2 s press), with X Y
+  from `adb exec-out screencap -p > shot.png`.
+- On the boards: A's log shows the phone as `mesh: peer <random addr> v0.0.0-0 #rrggbb hold|idle`, its waves and
+  rings as from any peer, and its clips as `mesh: clip <id> from phone <origin> ...`.
+
 ## 8. Diagnostics
 
 `python tools/devloop/devloop.py reboot 300`, wait for `idle`, then `python tools/diag_summary.py

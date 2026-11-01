@@ -166,6 +166,7 @@ blob (L68); a missing key keeps its default. Changed only from the USB console (
 ## Languages
 
 English and French (Canada), espforge's i18n: display texts in `main/i18n_strings.h`. The Pages site is English.
+The Android app has its own texts (`android/app/src/main/res/values*/strings.xml`), the same words as the boards'.
 
 ## Updates
 
@@ -217,6 +218,8 @@ Estimates from the research (to replace with `idf.py size` and the `heap` comman
 | `mesh: ring from self\|<addr>`, `clip: ring end after <n>, answered\|stopped\|not answered` | A call sent / heard, and how it ended |
 | `mesh: answer to <origin>` / `mesh: answer from <addr>`, `clip: call answered by <origin> (<n> so far)`, `clip: call over, <n> answered`, `clip: answered sound played`, `clip: call not answered` | The answer sent / received by the caller |
 | `ui: overlay message\|call\|calling\|answered\|off` | The incoming clip or call screen |
+| `mesh: clip <id> from phone <origin> (sid <n>), <s> s, <k> kHz` | The Android app's clip beacon heard: syncing to its train |
+| `clip: clip <id> from <origin> complete, ... (<n> chunks heard of <total>, synced after <ms> ms, whole after <ms> ms)` | Any received clip, with the receive numbers (the dropped line has `heard` and `synced after` too) |
 | `diag: mark app ready` | `forge.json` `ready_line` |
 
 ## Known issues / TODO
@@ -309,6 +312,45 @@ every board, not one link per board).
   over 4 min with clips and calls (rc.3).
 - **Verified** (rc.3, three boards): B's 5 s clip reached A whole (`clip 6 from 76 complete, 40000 bytes, 0 holes`,
   `played 5.00 s`) and C (the user heard it); calls rang on B and C, a tap stopped them on A.
+
+### Phone app (android/, main/mesh_proto.c, clip.c, clip_chunks.c; v0.7.0)
+
+The user's choices (2026-11-01): a native Android app rather than a web page (Web Bluetooth cannot advertise or
+scan, so a page would need a gateway board and a GATT service: too much firmware and RAM); one screen (mockup A:
+the circle, the 12 swatches, Call and Hold to talk); phone voice clips at 8 kHz (twice as fast to arrive). No iPhone:
+iOS does not let an app advertise manufacturer data.
+
+- **The phone is a member of the flood**, like a fourth board: one legacy, non-connectable, non-scannable advertising
+  set (no Flags AD, so the 30-byte ColorMesh AD fits), its data changed in place; one continuous low-latency scan
+  filtered on the ColorMesh AD. Its origin is a random byte saved in the app, picked again if a board uses it
+  (Android rotates the phone's address; the origin stays). It sends flags only `MP_F_HOLDING`, version 0, target
+  NONE: no board ever serves or pulls firmware with it.
+- **Byte 29 = the sender's advertising interval in 10 ms steps** (0 = older firmware, 20 ms). Android advertises every
+  100 ms at best, and the boards' 250 ms hold expiry made the phone's colour flicker; a holder now keeps its hold for
+  3 intervals + 100 ms (`mp_hold_expiry_ms`, at most 1 s): 400 ms for the phone, 250 for a board. The layout is
+  unchanged (the byte was reserved, zero).
+- **Same rules as the boards**: `MeshProto.kt` ports `mesh_proto.c` (codec, table by address, stale seq, expiry,
+  the mix in linear light), `PhoneMesh.kt` ports `peer_effect` and `calls.c`, `WaveField.kt` the wave rule,
+  `RingTone.kt` the ring. `tests/fixtures/mesh_vectors.txt` and `clip_vectors.txt` are made by the firmware's C code;
+  `test_mesh.c` and the app's JVM tests check both against them.
+- **Voice clips from the phone**: Android gives each advertising set its own random address and picks its SID, so a
+  board cannot find the phone's train from its flood advert (a board's train is the flood address + SID 1). The
+  phone's clip set is extended (not legacy) and carries a **beacon AD** `[9] FF FF FF 43 'B' origin id tenths kHz`;
+  the boards hand it to `clip.c` (`mesh_set_beacon_hook`), which syncs to that report's address and SID. Android
+  refuses periodic data in several HCI fragments while the train runs (`COMMAND_DISALLOWED`, Pixel 8 Pro), so the
+  phone sends **one chunk per 100 ms** (2.2 KB/s, a board 22 KB/s): it records at **8 kHz**, says so in the beacon,
+  and the boards double the samples (`clip_upsample2`). The phone holds the first packet 1.5 s (the boards sync
+  only after the beacon: 0.2-0.6 s measured) and changes the packet every **125 ms** (`Clip.PKT_MS`, ~132 ms with the
+  33 ms frame): at 100 ms, the same as the train's interval, Android sometimes replaced a packet before it went out
+  once, and one chunk in 52 was missing after 2 and after 3 rounds. Two rounds; the boards play as soon as the clip
+  is whole. Measured on board A (v0.7.0-rc.2): 2.8 s clip whole after 8.5 s, 3.9 s after 18 s, 4.9 s after 15 s,
+  0 holes, all three boards played. The boards also put long periodic packets back together (`clip_frag_*`) and
+  read every chunk AD in one (company ids 0xFFxx), ready for a phone that can send more per packet.
+- The phone cannot play the boards' clips: Android has no public API to sync to another device's periodic train.
+- Signing: one release key outside the repo (`C:\Users\lmathieu\ESPDEV\keys\colormesh-android.jks`, its
+  passwords in the `.txt` beside it), in CI from the `CM_KEYSTORE_*` secrets; the same key every release, so an
+  update installs over the app. CI job `android` (unit tests + APK, attached to the release); the pages job puts the
+  newest APK at `app/colormesh.apk` and the installer page shows the "Phone app" card.
 
 ### Secure updates: the paired admin board (main/mesh_fw.c, fw_auth.c; v0.4.0)
 

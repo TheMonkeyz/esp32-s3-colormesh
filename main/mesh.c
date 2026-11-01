@@ -25,6 +25,7 @@
 #include "mesh_proto.h"
 #include "mesh_fw.h"
 #include "rps.h"
+#include "clip_chunks.h"
 
 static const char *TAG = "mesh";
 static const char *TAG_BLE = "ble";
@@ -74,6 +75,7 @@ static volatile mesh_gap_hook_t gap_hook;
 static volatile mesh_clip_cb_t clip_cb;     // clip.c: a peer announced a new clip
 static volatile mesh_ring_cb_t ring_cb;     // clip.c: a peer calls
 static volatile mesh_ring_cb_t answer_cb;   // clip.c: a peer answered this board's call
+static volatile mesh_beacon_cb_t beacon_cb; // clip.c: the Android app's clip set announced a clip
 static volatile uint8_t own_answer_to;       // byte 28 with MP_EFFECT_ANSWER: the caller answered
 
 // Voice clips: the own bytes 26-27 and MP_F_CLIP; per peer address the last clip id handed to clip_cb
@@ -180,6 +182,25 @@ static void on_report(const ble_addr_t *addr, int8_t rssi, uint8_t evt, const ui
     if (us > cb_us_max) cb_us_max = us;
 }
 
+#if MYNEWT_VAL(BLE_EXT_ADV)
+// An extended (not legacy) report: the Android app's clip beacon? Each (origin, clip id) goes to beacon_cb once.
+// NimBLE host task only.
+static void beacon_report(const struct ble_gap_ext_disc_desc *d)
+{
+    static uint16_t seen[4];                        // origin << 8 | id, + 1 (0 = empty)
+    static int next;
+    uint8_t origin, id, ds, khz;
+    mesh_beacon_cb_t cb = beacon_cb;
+    if (!cb || !clip_beacon_parse(d->data, d->length_data, &origin, &id, &ds, &khz)) return;
+    uint16_t key = (uint16_t)((origin << 8 | id) + 1);
+    for (int i = 0; i < 4; i++) if (seen[i] == key) return;
+    seen[next] = key;
+    next = (next + 1) % 4;
+    ESP_LOGI(TAG, "clip %u from phone %02x (sid %u), %u.%u s, %u kHz", id, origin, d->sid, ds / 10, ds % 10, khz);
+    cb(d->addr.val, d->addr.type, d->sid, origin, id, ds, khz);
+}
+#endif
+
 static int gap_event(struct ble_gap_event *e, void *arg)
 {
     if (e->type == BLE_GAP_EVENT_DISC) {             // the hot path: copy and return, nothing logged
@@ -191,6 +212,8 @@ static int gap_event(struct ble_gap_event *e, void *arg)
         const struct ble_gap_ext_disc_desc *d = &e->ext_disc;
         if (d->props & BLE_HCI_ADV_LEGACY_MASK)      // a clip's own set is not legacy: the controller syncs to it
             on_report(&d->addr, d->rssi, d->legacy_event_type, d->data, d->length_data);
+        else
+            beacon_report(d);                        // the Android app's clip set
         return 0;
     }
 #endif
@@ -349,7 +372,8 @@ static void do_refresh(void)
     s.target = target;
     s.effect = own_effect;
     s.effect_seq = own_effect_seq;
-    uint32_t b2 = own_b2;                            // bytes 19-21: 0, 0, 0 = automatic
+    s.adv_ds = (adv_fallback ? ADV_ITVL_SLOW : ADV_ITVL_FAST) * 5u / 80u;   // byte 29: 2 (20 ms) or 10 (100 ms)
+    uint32_t b2 = own_b2;                           // bytes 19-21: 0, 0, 0 = automatic
     if (b2) {
         s.b2r = (uint8_t)(b2 >> 16);
         s.b2g = (uint8_t)(b2 >> 8);
@@ -999,6 +1023,8 @@ void mesh_answer(uint8_t caller)
     effect_req = true;
     wake();
 }
+
+void mesh_set_beacon_hook(mesh_beacon_cb_t cb) { beacon_cb = cb; }
 
 void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring, mesh_ring_cb_t answer)
 {
