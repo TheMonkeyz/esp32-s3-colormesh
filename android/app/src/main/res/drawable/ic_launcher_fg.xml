@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Three overlapping discs (red, green, blue): the additive colour mix -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#CCFF3B30" android:pathData="M54,46m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <path android:fillColor="#CC34C759" android:pathData="M45,60m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+    <path android:fillColor="#CC2F7BFF" android:pathData="M63,60m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0" />
+</vector>

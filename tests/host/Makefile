@@ -36,7 +36,7 @@ $(OUT)/test_testcon: test_testcon.c $(CORE)/testcon_registry.c $(CORE)/include/t
 $(OUT)/test_i18n: test_i18n.c $(CORE)/i18n.c $(CORE)/include/forge_i18n.h $(MAIN)/i18n_strings.h | $(OUT)
 	$(CC) $(CFLAGS) -o $@ test_i18n.c $(CORE)/i18n.c
 # mesh_proto.c is pure C99 (no ESP-IDF header, no shim): built strictly, without host.h
-$(OUT)/test_mesh: test_mesh.c $(MAIN)/mesh_proto.c $(MAIN)/mesh_proto.h check.h | $(OUT)
+$(OUT)/test_mesh: test_mesh.c $(MAIN)/mesh_proto.c $(MAIN)/mesh_proto.h check.h ../fixtures/mesh_vectors.txt | $(OUT)
 	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 	    -I$(MAIN) -o $@ test_mesh.c $(MAIN)/mesh_proto.c
 # wave.c is pure C99 too (libm only for its tables); test_wave prints frame times under the sanitizers, and

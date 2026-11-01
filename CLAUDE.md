@@ -124,6 +124,8 @@ Add each preference the user states (gestures, wording, timing, look) with the d
 - 2026-11-01, pages: left to right **colour choice, mesh, calling, rock paper scissors, system**; every page but
   system shows the mesh's colours and waves behind it **at full strength** (choice A of three mockups: full / dimmed
   35 % / edge only). Texts over it: **white with a black outline**; colour swatches: **a black edge**.
+- 2026-11-01, phone: a **native Android app** (not a web page with a gateway board); **one screen** (mockup A:
+  circle, swatches, Call, Hold to talk); phone voice clips at **8 kHz** ("half quality, 2x faster" over 16 kHz).
 - 2026-11-01: fingers land low on the voice page's Call button (rc.6 missed a press 21 px under it): keep its touch
   margin large and never start a recording near it.
 
@@ -153,5 +155,11 @@ rediscover.
   5.4 s to every board at once; `ble_gap_periodic_adv_set_data` every 10 ms was never refused (rc.2/rc.3). Internal
   RAM at app ready is 98 KB free, largest block 31 KB since then (I2S both ways + ext adv).
 - The microphones are quiet: a silent room peaks at ~140 of 32767 at 24 dB gain; clip.c scales clips up to x8.
+- Android app (v0.7.0): the user's phone is a Pixel 8 Pro, Android 17, paired for wireless debugging (`adb mdns
+  services` finds it; the pairing port the phone shows can be mistyped). Android advertises every 100 ms at best,
+  sends periodic data only in one HCI command (251 bytes) while the train runs, and gives every advertising set its
+  own random address and SID; a new periodic packet every 100 ms (= the train's interval) loses packets to jitter,
+  125 ms does not (rc.2). Build and adb recipes: docs/TESTING.md §7b. Signing key: `..\keys\colormesh-android.jks`
+  (outside the repo); the CI secrets `CM_KEYSTORE_B64`, `CM_KEYSTORE_PASS`, `CM_KEY_ALIAS`, `CM_KEY_PASS`.
 - A board with a label the peers already hold does not serve them again (`not newer`): every build the boards pull
   consumes its label (rc.2-rc.4 on 2026-10-31). Probe before letting a full pull complete.

@@ -139,8 +139,49 @@ jobs:
       - name: Flasher page, configuration card (web/flash/config.js)
         run: node web/flash/config.test.js
 
+  android:
+    # The phone app (android/): its unit tests (the protocol against tests/fixtures, made by the firmware's C code) and
+    # the APK, signed with the release key from the secrets when they are there (CM_KEYSTORE_B64, CM_KEYSTORE_PASS,
+    # CM_KEY_ALIAS, CM_KEY_PASS), so every release installs over the one before
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - id: ver
+        run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+      - name: Unit tests and APK
+        working-directory: android
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
+          KS_B64: ${{ secrets.CM_KEYSTORE_B64 }}
+          CM_KEYSTORE_PASS: ${{ secrets.CM_KEYSTORE_PASS }}
+          CM_KEY_ALIAS: ${{ secrets.CM_KEY_ALIAS }}
+          CM_KEY_PASS: ${{ secrets.CM_KEY_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            export CM_KEYSTORE="$RUNNER_TEMP/release.jks"
+          else
+            echo "::warning::No signing key in the secrets: the release APK is unsigned"
+          fi
+          ./gradlew --no-daemon test assembleRelease
+          mkdir -p ../apk
+          cp app/build/outputs/apk/release/*.apk "../apk/colormesh-$APP_VERSION.apk"
+          ls -l ../apk
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: android-${{ steps.ver.outputs.version }}
+          path: apk/
+
   release:
-    needs: [config, build, host-tests]
+    needs: [config, build, host-tests, android]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -150,6 +191,10 @@ jobs:
         with:
           name: firmware-${{ needs.build.outputs.version }}
           path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: android-${{ needs.android.outputs.version }}
+          path: dist
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3
         with:
           files: dist/*
@@ -157,6 +202,8 @@ jobs:
           generate_release_notes: true
           body: |
             Install from the browser: ${{ needs.config.outputs.ota_site }}${{ contains(github.ref_name, '-') && '?channel=beta' || '' }}
+
+            Phone app (Android 8 or later, not iPhone): `colormesh-${{ needs.build.outputs.version }}.apk`, also on the site.
 
             Or with esptool, first install (erases saved settings):
             `esptool.py --chip ${{ needs.config.outputs.chip }} write_flash 0x0 ${{ needs.config.outputs.app }}-${{ needs.build.outputs.version }}-full.bin`
@@ -215,6 +262,14 @@ jobs:
             args="$args --beta rel/beta"
           fi
           python3 tools/make_flasher_site.py site $args --out _site
+          # The phone app: the APK of the newest release that has one (beta first), at app/colormesh.apk
+          mkdir -p _site/app
+          for tag in "$beta" "$stable"; do
+            [ "$tag" = "-" ] && continue
+            if gh release download "$tag" --dir rel/apk --pattern "*.apk" --clobber 2>/dev/null; then
+              cp rel/apk/*.apk _site/app/colormesh.apk && echo "app from $tag" && break
+            fi
+          done
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5
         with:

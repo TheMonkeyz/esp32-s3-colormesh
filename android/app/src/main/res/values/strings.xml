@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- English texts. French (Québec) in values-fr: the same words as the boards (main/i18n_strings.h). -->
+<resources>
+    <string name="app_name">ColorMesh</string>
+    <string name="hold_hint">Touch the circle to send your colour</string>
+    <plurals name="near">
+        <item quantity="one">%d near</item>
+        <item quantity="other">%d near</item>
+    </plurals>
+    <string name="call">Call</string>
+    <string name="call_in">Incoming call</string>
+    <string name="call_answer">Touch the circle to answer</string>
+    <string name="call_out">Calling…</string>
+    <string name="call_answered">Answered</string>
+    <string name="call_close">Touch the circle to close</string>
+    <string name="need_permission">ColorMesh needs the Bluetooth permission to hear and reach the boards.</string>
+    <string name="bt_off">Turn on Bluetooth to join the boards.</string>
+    <string name="radio_error">Bluetooth error (%s)</string>
+    <string name="talk">Hold to talk</string>
+    <string name="talking">Recording…</string>
+    <string name="sending">Sending…</string>
+    <string name="no_clips">This phone cannot send voice clips (no Bluetooth periodic advertising).</string>
+    <string name="no_mic">No microphone</string>
+    <string name="clip_failed">The voice clip did not go out.</string>
+</resources>

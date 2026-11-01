@@ -5,24 +5,25 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
-## Unreleased (feature/page-order, tested as v0.7.1-smooth.1-8) - 2026-11-01
-- Smooth waves behind the colour choice, voice and game pages too (about 50 frames a second, like the mesh page):
-  they no longer freeze for a moment every second.
-- Swipes with waves running stay smooth (about 60 frames a second).
-
-## v0.6.0-rc.19 - 2026-11-01
-- The waves keep moving while you swipe between pages, and come back right after a swipe.
-- No more tearing in the waves; smoother waves (about 50 frames a second on the mesh page, 33-44 on the others).
-- The talk disc and the Call button on the voice page have a black edge.
-
-## v0.6.0-rc.12 - 2026-11-01
-- Texts on the colour choice, voice and game pages are white with a black outline: readable over any colour or wave.
-- The colour swatches have a black edge.
-
-## v0.6.0-rc.10 - 2026-11-01
+## Unreleased (feature/page-order) - 2026-11-01
 - New page order, left to right: colour choice, the mesh, voice and calls, rock paper scissors, system.
 - The colour choice, voice and game pages show the mesh behind them: the mixed colour while someone holds, and the
-  waves.
+  waves, smooth (about 50 frames a second) and without tearing; the waves keep moving while you swipe.
+- Texts on those pages are white with a black outline; the colour swatches, the talk disc and the Call button have a
+  black edge.
+- The Call button is easier to hit.
+
+## v0.7.0-rc.2 - 2026-11-01
+- Everything in rc.1, and the phone's voice messages arrive whole: the app sends them a little slower and steadier
+  (a 3 s message plays about 8 s after you let go, a 5 s one 13 to 18 s).
+- Boards log how each voice message came in (chunks heard, time to lock on, time to whole).
+
+## v0.7.0-rc.1 - 2026-11-01
+- A phone joins the boards: the ColorMesh app for Android (download it from this page). Touch the circle to send
+  your colour, tap it for a wave, call the boards, answer their calls, and hold "Hold to talk" to send a voice
+  message (the boards play it about twice its length after you let go: Android sends slower than a board).
+- The boards keep a slow sender's colour steady: each advert now says how often it is sent, and a board waits three
+  of those before it drops a held colour (the phone sends every 100 ms, a board every 20 ms).
 
 ## v0.6.0-rc.8 - 2026-11-01
 - The first tagged build of the voice release: the same code as rc.7 (rc.1-rc.7 were test labels).

@@ -107,6 +107,15 @@
     <p class="muted" id="try" hidden>No board at hand? <a href="try/">Try it in your browser</a>.</p>
   </section>
 
+  <section class="card" id="app-card" hidden>
+    <h2 style="margin:0 0 8px;font-size:1.1rem">Phone app (Android)</h2>
+    <p style="margin:0 0 8px">Your phone joins the boards like one more board: your colour, waves, calls and voice
+      messages. Android 8 or later with Bluetooth LE; not iPhone (iOS does not let an app send these adverts).</p>
+    <p style="margin:0 0 8px"><a class="btn" id="app-link" href="app/colormesh.apk" download style="display:inline-block;text-decoration:none">Download the app</a></p>
+    <p class="muted" style="margin:0">On the phone: open the downloaded file, allow your browser to install apps when
+      Android asks, then tap Install. Open ColorMesh and allow Bluetooth (and the microphone for voice messages).</p>
+  </section>
+
   <details class="card" id="cfg-card">
     <summary>Configure over USB</summary>
     <p class="muted" style="margin:0 0 12px">With the board plugged in (and the Install dialog closed: it holds the
@@ -243,6 +252,10 @@ fetch('channels.json', { cache: 'no-store' }).then(r => r.json()).then(ch => {
   $('try').hidden = !ch.try;
   pick(ch.stable ? 'stable' : 'beta');
 }).catch(() => { $('v-stable').textContent = $('v-beta').textContent = 'unavailable'; });
+
+// The phone app's card shows when the site carries an APK (the pages job copies the newest release's)
+fetch('app/colormesh.apk', { method: 'HEAD', cache: 'no-store' }).then(r => { $('app-card').hidden = !r.ok; })
+  .catch(() => {});
 
 fetch('notes.json', { cache: 'no-store' }).then(r => r.json()).then(n => {
   releases = n.releases || [];

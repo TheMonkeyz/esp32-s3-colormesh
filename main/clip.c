@@ -50,6 +50,8 @@ typedef enum { EV_REC_END, EV_REC_DROP, EV_SEND, EV_PLAY_LAST, EV_RING_IN, EV_RI
 typedef struct {
     ev_kind_t kind;
     uint8_t addr[6], origin, id, rgb[3];
+    uint8_t addr_type, sid;                 // EV_RX_START: the train's address type and SID (a board: public, 1)
+    uint8_t khz;                            // EV_RX_START: the clip's sample rate (a board: 16, the phone: 8)
 } ev_t;
 
 static QueueHandle_t q;
@@ -71,6 +73,7 @@ static uint16_t rx_sync = 0xFFFF;           // under rx_lock: the sync handle, 0
 static bool rx_pending;                     // under rx_lock: a sync create is outstanding
 static int64_t rx_deadline_us;              // clip task
 static uint8_t rx_rgb[3];                   // clip task: the sender's colour
+static uint8_t rx_khz = 16;                 // clip task: the clip's sample rate
 
 static clip_state_t st;                     // written by the clip task (and rec_begin), read anywhere
 
@@ -147,13 +150,16 @@ static void play_pcm_n(const int16_t *pcm, uint32_t n, const uint8_t rgb[3])
     set_phase(CLIP_IDLE);
 }
 
-static void play_adpcm(const uint8_t *code, uint32_t len, const uint8_t rgb[3])
+// khz: 16 (a board's clip), or 8 (the phone's: each sample doubled to the I2S rate)
+static void play_adpcm(const uint8_t *code, uint32_t len, const uint8_t rgb[3], int khz)
 {
     adpcm_state_t s;
     adpcm_init(&s);
-    if (len > REC_MAX / 2) len = REC_MAX / 2;
+    uint32_t max = khz == 8 ? REC_MAX / 4 : REC_MAX / 2;
+    if (len > max) len = max;
     adpcm_decode(&s, code, len, play_pcm);
-    play_pcm_n(play_pcm, len * 2, rgb);
+    if (khz == 8) clip_upsample2(play_pcm, len * 2);
+    play_pcm_n(play_pcm, khz == 8 ? len * 4 : len * 2, rgb);
 }
 
 // A call rings here; `caller` is the calling board's origin (CALLER_NONE for "ring local"). A tap answers: the
@@ -256,26 +262,47 @@ static void send_clip(void)
 
 // ---- receive (sync_cb runs in the NimBLE host task) ----
 
+static clip_frag_t frag;                     // host task: a periodic packet in fragments (the Android app's are long)
+static volatile uint32_t rx_heard;           // chunk ADs heard for the clip being received (repeats included)
+static volatile int64_t rx_t0_us, rx_sync_us; // when the sync was asked for, when it came up (0 = not yet)
+
+// One whole periodic packet: every clip chunk AD in it (a board sends one, the Android app several)
+static void rx_packet(const uint8_t *data, size_t n)
+{
+    size_t off = 0, len;
+    const uint8_t *ad;
+    bool done = false, failed = false;
+    xSemaphoreTake(rx_lock, portMAX_DELAY);
+    while (!done && clip_next_ad(data, n, &off, &ad, &len)) {
+        clip_pkt_t p;
+        if (!clip_parse(ad, len, &p)) continue;
+        rx_heard++;
+        done = clip_rx_add(&rx, &p);
+        failed = !done && !rx.active;               // every chunk in but the CRC did not match
+        if (failed) break;
+    }
+    xSemaphoreGive(rx_lock);
+    if (done) post(EV_RX_DONE);
+    else if (failed) post(EV_RX_LOST);
+}
+
 static int sync_cb(struct ble_gap_event *e, void *arg)
 {
     switch (e->type) {
     case BLE_GAP_EVENT_PERIODIC_SYNC:
         xSemaphoreTake(rx_lock, portMAX_DELAY);
         rx_pending = false;
-        if (e->periodic_sync.status == 0) rx_sync = e->periodic_sync.sync_handle;
+        if (e->periodic_sync.status == 0) {
+            rx_sync = e->periodic_sync.sync_handle;
+            rx_sync_us = esp_timer_get_time();
+        }
         xSemaphoreGive(rx_lock);
         if (e->periodic_sync.status) post(EV_RX_LOST);
         break;
     case BLE_GAP_EVENT_PERIODIC_REPORT: {
-        if (e->periodic_report.data_status != BLE_HCI_PERIODIC_DATA_STATUS_COMPLETE) break;
-        clip_pkt_t p;
-        if (!clip_parse(e->periodic_report.data, e->periodic_report.data_length, &p)) break;
-        xSemaphoreTake(rx_lock, portMAX_DELAY);
-        bool done = clip_rx_add(&rx, &p);
-        bool failed = !done && !rx.active;           // every chunk in but the CRC did not match
-        xSemaphoreGive(rx_lock);
-        if (done) post(EV_RX_DONE);
-        else if (failed) post(EV_RX_LOST);
+        int n = clip_frag_add(&frag, e->periodic_report.data, e->periodic_report.data_length,
+                              e->periodic_report.data_status);
+        if (n > 0) rx_packet(frag.buf, (size_t)n);
         break;
     }
     case BLE_GAP_EVENT_PERIODIC_SYNC_LOST:
@@ -313,10 +340,11 @@ static void rx_start(const ev_t *e)
     clip_rx_begin(&rx, e->origin, e->id, rx_buf);
     rx_pending = true;
     xSemaphoreGive(rx_lock);
-    ble_addr_t a = { .type = BLE_ADDR_PUBLIC };
+    ble_addr_t a = { .type = e->addr_type };
     memcpy(a.val, e->addr, 6);
+    clip_frag_reset(&frag);
     struct ble_gap_periodic_sync_params p = { .skip = 0, .sync_timeout = SYNC_TIMEOUT };
-    int rc = ble_gap_periodic_adv_sync_create(&a, MESH_ADV_CLIP, &p, sync_cb, NULL);
+    int rc = ble_gap_periodic_adv_sync_create(&a, e->sid, &p, sync_cb, NULL);
     if (rc) {
         ESP_LOGW(TAG, "sync create rc=%d", rc);
         xSemaphoreTake(rx_lock, portMAX_DELAY);
@@ -326,7 +354,11 @@ static void rx_start(const ev_t *e)
         return;
     }
     memcpy(rx_rgb, e->rgb, 3);
-    rx_deadline_us = esp_timer_get_time() + SYNC_WAIT_MS * 1000LL;
+    rx_khz = e->khz == 8 ? 8 : 16;
+    rx_heard = 0;
+    rx_sync_us = 0;
+    rx_t0_us = esp_timer_get_time();
+    rx_deadline_us = rx_t0_us + SYNC_WAIT_MS * 1000LL;
     st.receiving = true;
 }
 
@@ -334,12 +366,27 @@ static void rx_start(const ev_t *e)
 
 static void on_clip(const uint8_t addr[6], uint8_t origin, uint8_t id, uint8_t ds)
 {
-    ev_t e = { .kind = EV_RX_START, .origin = origin, .id = id };
+    ev_t e = { .kind = EV_RX_START, .origin = origin, .id = id, .addr_type = BLE_ADDR_PUBLIC, .sid = MESH_ADV_CLIP,
+               .khz = 16 };
     memcpy(e.addr, addr, 6);
     mesh_peer_t peers[MP_MAX_PEERS];
     int n = mesh_peers(peers, MP_MAX_PEERS);
     for (int i = 0; i < n; i++)
         if (!memcmp(peers[i].addr, addr, 6)) e.rgb[0] = peers[i].r, e.rgb[1] = peers[i].g, e.rgb[2] = peers[i].b;
+    if (q) xQueueSend(q, &e, 0);
+}
+
+// The Android app's clip: its train is on the set that carries the beacon (its address type and SID); the colour is
+// the phone's, found by origin (its flood advert has another address)
+static void on_beacon(const uint8_t addr[6], uint8_t addr_type, uint8_t sid, uint8_t origin, uint8_t id, uint8_t ds,
+                      uint8_t khz)
+{
+    ev_t e = { .kind = EV_RX_START, .origin = origin, .id = id, .addr_type = addr_type, .sid = sid, .khz = khz };
+    memcpy(e.addr, addr, 6);
+    mesh_peer_t peers[MP_MAX_PEERS];
+    int n = mesh_peers(peers, MP_MAX_PEERS);
+    for (int i = 0; i < n; i++)
+        if (peers[i].origin == origin) e.rgb[0] = peers[i].r, e.rgb[1] = peers[i].g, e.rgb[2] = peers[i].b;
     if (q) xQueueSend(q, &e, 0);
 }
 
@@ -392,7 +439,7 @@ static void handle(const ev_t *e)
     case EV_PLAY_LAST: {
         const app_cfg_t *c = config_get();
         uint8_t own[3] = { c->r, c->g, c->b };
-        if (tx_len) play_adpcm(tx_buf, tx_len, own);
+        if (tx_len) play_adpcm(tx_buf, tx_len, own, 16);
         else ESP_LOGW(TAG, "no clip to play");
         break;
     }
@@ -418,8 +465,10 @@ static void handle(const ev_t *e)
         uint8_t id = rx.id, origin = rx.origin;
         xSemaphoreGive(rx_lock);
         rx_stop();
-        ESP_LOGI(TAG, "clip %u from %02x complete, %lu bytes, 0 holes", id, origin, (unsigned long)len);
-        play_adpcm(rx_buf, len, rx_rgb);
+        ESP_LOGI(TAG, "clip %u from %02x complete, %lu bytes, 0 holes (%lu chunks heard of %u, synced after %lld ms, "
+                 "whole after %lld ms)", id, origin, (unsigned long)len, (unsigned long)rx_heard, clip_chunks(len),
+                 rx_sync_us ? (rx_sync_us - rx_t0_us) / 1000 : -1LL, (esp_timer_get_time() - rx_t0_us) / 1000);
+        play_adpcm(rx_buf, len, rx_rgb, rx_khz);
         break;
     }
     case EV_RX_LOST: {
@@ -430,7 +479,8 @@ static void handle(const ev_t *e)
         xSemaphoreGive(rx_lock);
         if (whole) ESP_LOGW(TAG, "clip %u from %02x: CRC mismatch, dropped", id, origin);
         else if (miss == 0xFFFF) ESP_LOGW(TAG, "clip %u from %02x: no sync, dropped", id, origin);
-        else ESP_LOGW(TAG, "clip %u from %02x: %u chunks missing, dropped", id, origin, miss);
+        else ESP_LOGW(TAG, "clip %u from %02x: %u chunks missing, dropped (%lu heard, synced after %lld ms)", id, origin,
+                      miss, (unsigned long)rx_heard, rx_sync_us ? (rx_sync_us - rx_t0_us) / 1000 : -1LL);
         rx_stop();
         break;
     }
@@ -515,6 +565,7 @@ void clip_start(void)
     bool sp = spk_open();
     ESP_LOGI(TAG, "microphones %s, speaker %s", mic_ok ? "ready" : "NOT found", sp ? "ready" : "NOT found");
     mesh_set_voice_hooks(on_clip, on_ring, on_answer);
+    mesh_set_beacon_hook(on_beacon);
     xTaskCreatePinnedToCore(clip_task, "clip", 4096, NULL, 4, NULL, 0);
     testcon_register("clip", "clip rec <ms>|send|play|info", cmd_clip);
     testcon_register("ring", "ring [local|stop|answer|cancel|answered]", cmd_ring);
