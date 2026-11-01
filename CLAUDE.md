@@ -98,6 +98,8 @@ Add each preference the user states (gestures, wording, timing, look) with the d
   "Toucher l'écran pour envoyer votre couleur" / "Touch the screen to send your colour" (the user replaced
   "Gardez le doigt pour envoyer votre couleur"); the pick screen "Choisissez votre couleur" / "Touchez une pastille".
 - 2026-10-31: the peer count on the main screen reads "N à portée" in French (not "N proches"); English "N near".
+- 2026-10-31: every board is in dev mode by default (config.c): only A is on the PC; B and C must take each new
+  firmware from A over Bluetooth. A board flashed before this default needs `devmode on` once over USB.
 
 
 ## Useful facts

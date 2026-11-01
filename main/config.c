@@ -9,7 +9,7 @@
 static const char *TAG = "cfg";
 #define NS "cm"
 
-static app_cfg_t cfg = { .r = 0xff, .g = 0x80, .b = 0x00, .dev_mode = false, .name = "", .bright = 80 };
+static app_cfg_t cfg = { .r = 0xff, .g = 0x80, .b = 0x00, .dev_mode = true, .name = "", .bright = 80 };
 
 static void apply_bright(void)
 {
