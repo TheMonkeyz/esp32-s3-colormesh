@@ -119,3 +119,14 @@ v0.2.0 tagged (waves, boot to main, swipes at 28 px, the installer page's gestur
 colour B: a long press on a ring swatch (dot mark), `color2` on the console and the USB card, bytes 19-21 of the
 advert; host tests mesh 923 / wave 95; harness 18/18. On the boards as v0.3.0-rc.1, confirmed by the user.
 
+## 2026-11-01: paired admin board, v0.4.0-rc.1/rc.2
+
+The user chose a paired admin over signed releases. A = admin (`admin on`, key wmg5gDSU), B and C paired over USB
+(`trust <key>`, `devmode off`). A test label `v0.4.0-rc.1-1-gsigned` was NOT taken: the version order reads
+`-rc.N-M-gHASH` as rc.N (not newer). With `v0.4.0-rc.2` on A: both boards targeted A within 4 s of its boot,
+`fw: proof sent ... accepted (sign 108 ms)` for each, both pulled in 22 s at 52 KB/s, 0 resent. Security review by
+the coordinator: nonce single use (constant-time compare), deterministic ECDSA, START gated on a verified proof
+with the signed length and digest, the image's own version must equal the signed one, bytes written hashed and
+compared before esp_ota_end. Lesson: a post-release test label only ranks above a release (`vX.Y.Z-N-g...`), never
+above an rc; use the next rc number for signed-pull tests.
+

@@ -5,6 +5,9 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.4.0-rc.2 - 2026-11-01
+- Same code as rc.1; the label the paired boards took in the first signed pull (rc.1 was the pairing build).
+
 ## v0.4.0-rc.1 - 2026-11-01
 - Secure updates for boards NOT in dev mode: make one board the admin (`admin on`, or the USB card), paste its key
   into the other boards once (`trust <key>`), then they take new firmware only from that admin, after it proves
