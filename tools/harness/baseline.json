@@ -1,1 +1,112 @@
-{}
+{
+ "boot_s.ready": {
+  "max": 3.4,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 2.4
+ },
+ "drag_first_frame_ms": {
+  "max": 21.0,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 15
+ },
+ "failed_allocs": {
+  "max": 0.0,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 0
+ },
+ "idle_internal_drop_kb": {
+  "max": 1.4,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 1
+ },
+ "internal_free_kb": {
+  "min": 111.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 149
+ },
+ "internal_largest_kb": {
+  "min": 58.5,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 78
+ },
+ "internal_min_kb": {
+  "min": 99.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 133
+ },
+ "lvgl_internal_fallbacks": {
+  "max": 0.0,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 0
+ },
+ "psram_min_kb": {
+  "min": 3839.2,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 5119
+ },
+ "snapshot_ms.main": {
+  "max": 1486.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 1062
+ },
+ "snapshot_ms.message": {
+  "max": 1206.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 862
+ },
+ "snapshot_ms.pick": {
+  "max": 1185.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 847
+ },
+ "snapshot_ms.system": {
+  "max": 1197.0,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 855
+ },
+ "swipe_fps.drag_slow": {
+  "min": 45.4,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 60.5
+ },
+ "swipe_fps.main_to_system": {
+  "min": 43.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 58.4
+ },
+ "swipe_fps.system_to_main": {
+  "min": 44.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 59.8
+ },
+ "swipe_gap_max_ms.drag_slow": {
+  "max": 57.4,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 41
+ },
+ "swipe_gap_max_ms.main_to_system": {
+  "max": 58.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 42
+ },
+ "swipe_gap_max_ms.system_to_main": {
+  "max": 44.8,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 32
+ },
+ "swipe_render_avg_ms.drag_slow": {
+  "max": 2.5,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 1.8
+ },
+ "swipe_render_avg_ms.main_to_system": {
+  "max": 2.5,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 1.8
+ },
+ "swipe_render_avg_ms.system_to_main": {
+  "max": 3.6,
+  "note": "proposed by --update-baseline: check the limit and the direction",
+  "ref": 2.6
+ }
+}
