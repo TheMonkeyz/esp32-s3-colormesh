@@ -595,6 +595,7 @@ int mesh_peers(mesh_peer_t *out, int max)
         memcpy(o->ver, p->st.ver, 4);
         o->rssi = p->rssi;
         o->last_ms = p->last_ms;
+        o->target = p->st.target;
     }
     xSemaphoreGive(table_lock);
     return n;

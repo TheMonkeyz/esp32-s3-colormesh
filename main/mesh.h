@@ -12,7 +12,9 @@ typedef struct {
     uint8_t ver[4];         // major, minor, patch, version kind
     int8_t rssi;
     uint32_t last_ms;       // when it was last heard (ms since boot)
+    uint8_t target;         // dev mode: the origin it wants firmware from (MP_TARGET_NONE otherwise)
 } mesh_peer_t;
+#define MESH_PEER_HAS_TARGET 1
 
 void mesh_start(void);                                  // after config_load(): reads config_get()
 void mesh_set_holding(bool on);                         // the finger is down on the main screen ("mesh: hold on|off")
