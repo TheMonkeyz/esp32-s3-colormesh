@@ -24,22 +24,23 @@ static mp_state_t state(uint8_t seq, uint8_t flags, uint8_t r, uint8_t g, uint8_
 static bool same(const mp_state_t *a, const mp_state_t *b)
 {
     return a->origin == b->origin && a->seq == b->seq && a->ttl == b->ttl && a->flags == b->flags && a->r == b->r &&
-           a->g == b->g && a->b == b->b && !memcmp(a->ver, b->ver, 4) && a->target == b->target;
+           a->g == b->g && a->b == b->b && !memcmp(a->ver, b->ver, 4) && a->target == b->target &&
+           a->effect == b->effect && a->effect_seq == b->effect_seq;
 }
 
 static void test_payload(void)
 {
     mp_state_t s = { 0xA7, 0xFE, 3, MP_F_HOLDING | MP_F_DEV | MP_F_SERVABLE | MP_F_PENDING, 0x12, 0x34, 0x56,
-                     { 1, 2, 3, 104 }, 0x42 };
+                     { 1, 2, 3, 104 }, 0x42, MP_EFFECT_WAVE_BOTTOM, 0x9C };
     uint8_t buf[31];
     memset(buf, 0xEE, sizeof(buf));
     CHECK(mp_encode(&s, buf, sizeof(buf)) == 30, "encode length");
-    static const uint8_t want[17] = { 29, 0xFF, 0xFF, 0xFF, 0x43, 0xA7, 0xFE, 3, 0x0F, 0x12, 0x34, 0x56,
-                                      1, 2, 3, 104, 0x42 };
+    static const uint8_t want[19] = { 29, 0xFF, 0xFF, 0xFF, 0x43, 0xA7, 0xFE, 3, 0x0F, 0x12, 0x34, 0x56,
+                                      1, 2, 3, 104, 0x42, 5, 0x9C };
     CHECK(!memcmp(buf, want, sizeof(want)), "byte map");
     bool zero = true;
-    for (int i = 17; i < 30; i++) zero = zero && buf[i] == 0;
-    CHECK(zero, "reserved bytes 17-29 are zero");
+    for (int i = 19; i < 30; i++) zero = zero && buf[i] == 0;
+    CHECK(zero, "reserved bytes 19-29 are zero");
     CHECK(buf[30] == 0xEE, "nothing written past 30 bytes");
     CHECK(mp_encode(&s, buf, 29) == -1, "a 29-byte buffer is too small");
     CHECK(mp_encode(&s, buf, 30) == 30, "a 30-byte buffer is enough");
@@ -50,16 +51,31 @@ static void test_payload(void)
     memset(&d, 0, sizeof(d));
     CHECK(mp_decode_ad(buf, 30, &d) && same(&d, &s), "round trip through the whole AD structure");
     // every field on its own, so a swapped pair would show
-    for (int f = 0; f < 12; f++) {         // origin seq ttl flags r g b ver[0..3] target
+    for (int f = 0; f < 14; f++) {         // origin seq ttl flags r g b ver[0..3] target effect effect_seq
         mp_state_t one = { 0 };
         uint8_t *p = f == 0 ? &one.origin : f == 1 ? &one.seq : f == 2 ? &one.ttl : f == 3 ? &one.flags
-                   : f == 4 ? &one.r : f == 5 ? &one.g : f == 6 ? &one.b : f == 11 ? &one.target : &one.ver[f - 7];
+                   : f == 4 ? &one.r : f == 5 ? &one.g : f == 6 ? &one.b : f == 11 ? &one.target
+                   : f == 12 ? &one.effect : f == 13 ? &one.effect_seq : &one.ver[f - 7];
         *p = (uint8_t)(0x80 + f);
         uint8_t ad[30];
         mp_state_t back;
         mp_encode(&one, ad, sizeof(ad));
         CHECK(mp_decode_ad(ad, 30, &back) && same(&back, &one), "field %d round trip", f);
     }
+    // the effect fields at bytes 17 and 18, every value
+    for (int v = 0; v < 256; v++) {
+        mp_state_t one = { 0 };
+        one.effect = (uint8_t)v;
+        one.effect_seq = (uint8_t)(255 - v);
+        uint8_t ad[30];
+        mp_state_t back;
+        memset(&back, 0xEE, sizeof(back));
+        mp_encode(&one, ad, sizeof(ad));
+        CHECK(ad[17] == v && ad[18] == 255 - v && mp_decode_ad(ad, 30, &back) && back.effect == v &&
+              back.effect_seq == 255 - v, "effect %d round trip", v);
+    }
+    CHECK(MP_EFFECT_NONE == 0 && MP_EFFECT_WAVE_CENTRE == 1 && MP_EFFECT_WAVE_LEFT == 2 && MP_EFFECT_WAVE_RIGHT == 3 &&
+          MP_EFFECT_WAVE_TOP == 4 && MP_EFFECT_WAVE_BOTTOM == 5, "effect ids");
 
     mp_state_t keep = d;
     CHECK(!mp_decode(buf + 2, 27, &d), "short value");
@@ -162,6 +178,21 @@ static void test_table(void)
     mp_state_t bumped = newer_ver;
     bumped.seq = 15;
     CHECK(!mp_table_update(&t, A, &bumped, -40, 1140), "a seq bump alone is no change");
+    mp_state_t wave = bumped;
+    wave.seq = 16;
+    wave.effect = MP_EFFECT_WAVE_LEFT;
+    wave.effect_seq = 1;
+    CHECK(mp_table_update(&t, A, &wave, -40, 1160), "a new effect is a change");
+    CHECK(t.peers[0].st.effect == MP_EFFECT_WAVE_LEFT && t.peers[0].st.effect_seq == 1, "the effect is stored");
+    CHECK(!mp_table_update(&t, A, &wave, -40, 1180), "the same effect again is no change");
+    mp_state_t again = wave;
+    again.seq = 17;
+    again.effect_seq = 2;
+    CHECK(mp_table_update(&t, A, &again, -40, 1200), "the same effect restarted (effect seq) is a change");
+    mp_state_t stop = again;
+    stop.seq = 18;
+    stop.effect = MP_EFFECT_NONE;
+    CHECK(mp_table_update(&t, A, &stop, -40, 1220), "an effect ending is a change");
 
     // seq wraps: 250 -> 3 is newer
     mp_table_init(&t, 0, 0);

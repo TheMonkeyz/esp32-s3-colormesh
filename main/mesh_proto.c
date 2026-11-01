@@ -7,7 +7,7 @@
 int mp_encode(const mp_state_t *s, uint8_t *buf, int cap)
 {
     if (!s || !buf || cap < MP_AD_SIZE) return -1;
-    memset(buf, 0, MP_AD_SIZE);                    // reserved bytes 17-29 stay zero
+    memset(buf, 0, MP_AD_SIZE);                    // reserved bytes 19-29 stay zero
     buf[0] = MP_AD_SIZE - 1;                       // the AD length counts the type and the value
     buf[1] = 0xFF;                                 // manufacturer specific data
     buf[2] = MP_COMPANY & 0xFF;
@@ -22,6 +22,8 @@ int mp_encode(const mp_state_t *s, uint8_t *buf, int cap)
     buf[11] = s->b;
     memcpy(&buf[12], s->ver, 4);
     buf[16] = s->target;
+    buf[17] = s->effect;
+    buf[18] = s->effect_seq;
     return MP_AD_SIZE;
 }
 
@@ -39,6 +41,8 @@ bool mp_decode(const uint8_t *mfg, int len, mp_state_t *out)
     s.b = mfg[9];
     memcpy(s.ver, &mfg[10], 4);
     s.target = mfg[14];
+    s.effect = mfg[15];
+    s.effect_seq = mfg[16];
     *out = s;
     return true;
 }
@@ -130,7 +134,7 @@ static uint32_t age_of(const mp_peer_t *p, uint32_t now_ms)
 static bool state_differs(const mp_state_t *a, const mp_state_t *b)
 {
     return a->r != b->r || a->g != b->g || a->b != b->b || a->flags != b->flags || a->target != b->target ||
-           memcmp(a->ver, b->ver, 4) != 0;
+           a->effect != b->effect || a->effect_seq != b->effect_seq || memcmp(a->ver, b->ver, 4) != 0;
 }
 
 bool mp_table_update(mp_table_t *t, const uint8_t addr[6], const mp_state_t *st, int8_t rssi, uint32_t now_ms)

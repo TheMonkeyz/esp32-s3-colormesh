@@ -6,7 +6,8 @@
 //   0 AD length (29) · 1 type 0xFF · 2-3 company id 0xFFFF (little-endian, guarded by the protocol byte) ·
 //   4 protocol MP_PROTO · 5 origin (low byte of the address) · 6 seq (bumped on a state change, wrap-aware) ·
 //   7 TTL (0 = never relay) · 8 flags (MP_F_*) · 9-11 R G B · 12-14 firmware major minor patch ·
-//   15 version kind (MP_VER_*) · 16 target origin (dev mode, else MP_TARGET_NONE) · 17-29 reserved, zero.
+//   15 version kind (MP_VER_*) · 16 target origin (dev mode, else MP_TARGET_NONE) · 17 effect (MP_EFFECT_*) ·
+//   18 effect seq (bumped by the sender for each new effect it starts) · 19-29 reserved, zero.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -26,6 +27,13 @@
 #define MP_VER_RC       100
 #define MP_VER_RELEASE  200
 #define MP_VER_POST     201
+// Byte 17, the effect the sender runs: none, or a bicolour wave from its colour (the values are wave.h's wave_kind_t)
+#define MP_EFFECT_NONE          0
+#define MP_EFFECT_WAVE_CENTRE   1
+#define MP_EFFECT_WAVE_LEFT     2
+#define MP_EFFECT_WAVE_RIGHT    3
+#define MP_EFFECT_WAVE_TOP      4
+#define MP_EFFECT_WAVE_BOTTOM   5
 #define MP_MAX_PEERS    16
 #define MP_HOLD_EXPIRY_MS 250     // 3 x 20 ms + 100 ms margin, rounded; 400 once the 100 ms interval is in use
 #define MP_PEER_EXPIRY_MS 10000
@@ -34,7 +42,7 @@
 #define MP_ADV_SLOW_MS  100
 #define MP_ADV_FAST_BELOW_PEERS 6
 
-typedef struct mp_state { uint8_t origin, seq, ttl, flags, r, g, b, ver[4], target; } mp_state_t;
+typedef struct mp_state { uint8_t origin, seq, ttl, flags, r, g, b, ver[4], target, effect, effect_seq; } mp_state_t;
 
 // The AD structure into buf: MP_AD_SIZE, or -1 if cap is smaller (or an argument is NULL)
 int  mp_encode(const mp_state_t *s, uint8_t *buf, int cap);
@@ -64,7 +72,7 @@ typedef struct {
 } mp_table_t;
 
 void mp_table_init(mp_table_t *t, uint32_t hold_expiry_ms, uint32_t peer_expiry_ms);   // 0 -> the defaults
-// One report from addr. True when the peer is new or its colour, flags, version or target changed. A strictly
+// One report from addr. True when the peer is new or its colour, flags, version, target or effect changed. A strictly
 // older seq is ignored (last_ms and rssi are still refreshed) unless MP_SEQ_RESET_REPORTS come in a row; an equal
 // seq re-applies the state. A full table replaces the least recently heard peer.
 bool mp_table_update(mp_table_t *t, const uint8_t addr[6], const mp_state_t *st, int8_t rssi, uint32_t now_ms);

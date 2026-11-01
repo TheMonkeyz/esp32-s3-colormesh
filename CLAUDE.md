@@ -100,6 +100,9 @@ Add each preference the user states (gestures, wording, timing, look) with the d
 - 2026-10-31: the peer count on the main screen reads "N à portée" in French (not "N proches"); English "N near".
 - 2026-10-31: every board is in dev mode by default (config.c): only A is on the PC; B and C must take each new
   firmware from A over Bluetooth. A board flashed before this default needs `devmode on` once over USB.
+- 2026-10-31, waves (from mockups): bicolour waves started by a TAP on the main screen (centre = rings outward;
+  left / right / top / bottom zones = bands moving in from that side); colour B = the opposite hue of the own
+  colour, nothing to set; waves from several boards merge per pixel like the colours; a hold still adds its colour.
 
 
 ## Useful facts

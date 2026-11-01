@@ -10,12 +10,13 @@ ifeq ($(wildcard $(FORGE)/forge_core/i18n.c),)
 $(error no espforge components at $(FORGE): build the firmware once, or python tools/fetch_forge.py, or FORGE=<espforge>/components)
 endif
 CORE := $(FORGE)/forge_core
-LVGLC := $(FORGE)/forge_lvgl
+# forge_lvgl is a local copy here (components/forge_lvgl, the drag hook): prefer it over the tag
+LVGLC := $(if $(wildcard ../../components/forge_lvgl/pager.c),../../components/forge_lvgl,$(FORGE)/forge_lvgl)
 MAIN := ../../main
 OUT := build
 CFLAGS := -std=gnu11 -D_DEFAULT_SOURCE -g -O1 -Wall -Wno-unused-function -fsanitize=address,undefined \
           -fno-sanitize-recover=undefined -Ishim -I$(CORE)/include -I$(MAIN) -include shim/host.h
-TESTS := utf8 version textfit pager testcon i18n mesh
+TESTS := utf8 version textfit pager testcon i18n mesh wave
 
 all: $(TESTS:%=$(OUT)/test_%)
 	@set -e; for t in $(TESTS); do ./$(OUT)/test_$$t; done
@@ -38,9 +39,19 @@ $(OUT)/test_i18n: test_i18n.c $(CORE)/i18n.c $(CORE)/include/forge_i18n.h $(MAIN
 $(OUT)/test_mesh: test_mesh.c $(MAIN)/mesh_proto.c $(MAIN)/mesh_proto.h check.h | $(OUT)
 	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined \
 	    -I$(MAIN) -o $@ test_mesh.c $(MAIN)/mesh_proto.c
+# wave.c is pure C99 too (libm only for its tables); test_wave prints frame times under the sanitizers, and
+# `make bench` builds it optimised without them for a fairer time (still a PC, not the ESP32-S3)
+WAVE_SRC := test_wave.c $(MAIN)/wave.c
+WAVE_DEP := $(WAVE_SRC) $(MAIN)/wave.h $(MAIN)/mesh_proto.h check.h
+$(OUT)/test_wave: $(WAVE_DEP) | $(OUT)
+	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined 	    -I$(MAIN) -o $@ $(WAVE_SRC) -lm
+$(OUT)/bench_wave: $(WAVE_DEP) | $(OUT)
+	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -O2 -I$(MAIN) -o $@ $(WAVE_SRC) -lm
+bench: $(OUT)/bench_wave
+	./$(OUT)/bench_wave
 
 $(OUT):
 	mkdir -p $(OUT)
 clean:
 	rm -rf $(OUT)
-.PHONY: all clean
+.PHONY: all clean bench
