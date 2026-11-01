@@ -33,8 +33,8 @@ static const char *TAG = "ui";
 #define DISC_R     215                        // main: the mix
 #define DOT_R      5                          // main: one dot per peer
 #define DOT_STEP   14
-#define DOT_Y      412                        // centre of the dots' row
-#define NEAR_Y     426                        // top of the "N near" line
+#define DOT_Y      372                        // centre of the dots' row
+#define NEAR_Y     388                        // top of the "N near" line
 #define MAX_DOTS   16
 #define SW_N       12                         // pick: swatches
 #define SW_R       22
