@@ -113,3 +113,9 @@ with five). First peer test: A received waves from both peers but sat on the rin
 nothing; boot now goes to main when a colour is saved. v0.2.0-rc.1 flashed on A, pulled by B and C in 21 s each; the
 user confirmed waves show and merge on every board.
 
+## 2026-11-01: v0.2.0 stable, v0.3.0-rc.1 (wave colour B)
+
+v0.2.0 tagged (waves, boot to main, swipes at 28 px, the installer page's gesture guide). Then the optional wave
+colour B: a long press on a ring swatch (dot mark), `color2` on the console and the USB card, bytes 19-21 of the
+advert; host tests mesh 923 / wave 95; harness 18/18. On the boards as v0.3.0-rc.1, confirmed by the user.
+
