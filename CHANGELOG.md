@@ -5,6 +5,9 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.5.0-rc.2 - 2026-11-01
+- Rock paper scissors: the title at the top of the game page sits lower, clear of the coloured ring.
+
 ## v0.5.0-rc.1 - 2026-11-01
 - Rock paper scissors: swipe left twice from the main screen. Tap to start a round on every board near you; "Rock,
   Paper, Scissors!" counts down 3 s; tap your pick before 0; every board shows the result at the same moment (your
