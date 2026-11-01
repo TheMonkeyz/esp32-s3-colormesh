@@ -15,6 +15,7 @@ and the decision here. -->
 ## Done
 
 - [x] **<idea>** — <one line> (vX.Y.Z).
+- [x] **Rock paper scissors** — a game page: one tap starts a 3 s countdown on every board, all reveal together (the user, 2026-11-01; v0.5.0).
 
 ## Animations over the mesh (the user, 2026-10-31: "once the project is stabilized")
 

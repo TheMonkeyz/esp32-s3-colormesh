@@ -1,5 +1,6 @@
-// The app's screens (see ui.h): "pick" | "main" | "system", the three pages of one pager (swiped like the espforge
-// starter's hello | system: the ring of 12 colours on the left, main in the middle), and "message". Everything here
+// The app's screens (see ui.h): "pick" | "main" | "system" | "game", the four pages of one pager (swiped like the
+// espforge starter's hello | system: the ring of 12 colours on the left, main second, rock paper scissors last), and
+// "message". Everything here
 // runs in the LVGL task or under display_lock.
 #include "ui.h"
 #include <math.h>
@@ -19,6 +20,8 @@
 #include "mesh.h"
 #include "mesh_fw.h"
 #include "wave.h"
+#include "rps.h"
+#include "rps_icons.h"
 
 static const char *TAG = "ui";
 
@@ -47,15 +50,20 @@ static const char *TAG = "ui";
 #define HOLD_IDLE_MS 150                      // safety net: no finger for this long = released
 #define TAP_CENTRE_R 100                      // main: a tap this close to the centre starts rings, else bands
 #define WAVE_PERIOD_MS 33                     // the wave loop: up to 30 fps
+#define G_TAP_R    70                         // game: a tap this close to an icon's centre picks it
+#define G_PEERS    5                          // game: the peers' picks shown on the result
+#define G_PEER_DX  64                         // ...this far apart
 
 extern const uint8_t ttf_start[] asm("_binary_montserrat_ttf_start");
 extern const uint8_t ttf_end[]   asm("_binary_montserrat_ttf_end");
 
 static lv_font_t *f_mid, *f_small, *f_tiny;
-enum { PG_PICK, PG_MAIN, PG_SYS, PG_N };       // the pager's pages, left to right
-static const char *const page_name[PG_N] = { "pick", "main", "system" };
+enum { PG_PICK, PG_MAIN, PG_SYS, PG_GAME, PG_N };   // the pager's pages, left to right
+static const char *const page_name[PG_N] = { "pick", "main", "system", "game" };
 
-static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *scr_msg;
+static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *pg_game, *scr_msg;
+static lv_obj_t *g_ring, *g_arc, *g_title, *g_word, *g_hint, *g_icon[3], *g_sel, *g_big, *g_out, *g_peer[G_PEERS],
+                *g_pdot[G_PEERS];
 static lv_obj_t *p_title, *p_sub, *p_back, *p_sw[SW_N], *p_dot[SW_N];
 static lv_obj_t *mn_ring, *mn_disc, *mn_arc, *mn_hint, *mn_near, *mn_dev, *mn_dot[MAX_DOTS];
 static lv_obj_t *mn_pills, *mn_admin;     // the DEV and ADMIN pills side by side (a flex row skips a hidden one)
@@ -512,6 +520,185 @@ static void system_create_page(lv_obj_t *pg)
     system_refresh();
 }
 
+/* ---------- game page (rock paper scissors, rps.h) ----------
+ * Idle: the three icons (rock top, paper bottom left, scissors bottom right) and "Tap to play". A tap starts a round
+ * on every board near (a tap on an icon also picks it). Countdown (3 s): the words "Rock", "Paper", "Scissors!" one a
+ * second in the centre, a white arc on the own-colour ring running out, the own pick outlined and the others dimmed.
+ * Result: the own pick large, won / lost / draw / too late, the peers' picks small with their colour dot under each.
+ */
+
+static const int g_cx[3] = { CX, CX - 103, CX + 103 }, g_cy[3] = { 118, 292, 292 };   // rock, paper, scissors
+static const lv_image_dsc_t *const g_src[4] = { NULL, &rps_icon_rock, &rps_icon_paper, &rps_icon_scissors };
+
+static struct {
+    int phase, own, word, arc, outcome, n;
+    uint32_t ring;
+    uint8_t peers[G_PEERS];
+} glast = { .phase = -1 };
+
+static void game_update(void)
+{
+    static mesh_game_t g;
+    mesh_game_state(&g);
+    const app_cfg_t *c = config_get();
+    uint32_t own = rgb(c->r, c->g, c->b);
+    if (own != glast.ring) {
+        glast.ring = own;
+        lv_obj_set_style_border_color(g_ring, lv_color_hex(own), 0);
+    }
+    bool counting = g.phase == RPS_COUNT || g.phase == RPS_COLLECT;
+    bool result = g.phase == RPS_RESULT;
+    int word = -1;                            // "Rock" for the first second, "Paper", then "Scissors!" until the result
+    if (g.phase == RPS_COLLECT) word = 2;
+    else if (g.phase == RPS_COUNT) word = g.ms_left > 2000 ? 0 : g.ms_left > 1000 ? 1 : 2;
+    int arc = g.phase == RPS_COUNT ? (int)(g.ms_left * 100 / RPS_COUNT_MS) : -1;
+    if (arc != glast.arc) {
+        glast.arc = arc;
+        set_hidden(g_arc, arc < 0);
+        if (arc >= 0) lv_arc_set_value(g_arc, arc);
+    }
+    uint8_t peers[G_PEERS] = { 0 };
+    for (int i = 0; result && i < g.n && i < G_PEERS; i++) peers[i] = g.peers[i].pick;
+    if (g.phase == glast.phase && g.own == glast.own && word == glast.word && g.outcome == glast.outcome &&
+        g.n == glast.n && !memcmp(peers, glast.peers, sizeof(peers)))
+        return;
+    glast.phase = g.phase;
+    glast.own = g.own;
+    glast.word = word;
+    glast.outcome = g.outcome;
+    glast.n = g.n;
+
+    static const int words[3] = { T_GAME_ROCK, T_GAME_PAPER, T_GAME_SCISSORS };
+    set_text(g_word, word >= 0 ? tr(words[word]) : "");
+    set_hidden(g_word, word < 0);
+    set_text(g_hint, tr(result ? T_GAME_AGAIN : counting ? T_GAME_PICK : T_GAME_HINT));
+    set_text(g_title, tr(T_GAME_TITLE));
+    for (int k = 0; k < 3; k++) {
+        set_hidden(g_icon[k], result);
+        lv_obj_set_style_image_opa(g_icon[k], counting && g.own && g.own != k + 1 ? LV_OPA_40 : LV_OPA_COVER, 0);
+    }
+    set_hidden(g_sel, !counting || !g.own);
+    if (counting && g.own) lv_obj_set_pos(g_sel, g_cx[g.own - 1] - RPS_ICON_PX / 2 - 10, g_cy[g.own - 1] - RPS_ICON_PX / 2 - 10);
+
+    set_hidden(g_big, !result || !g.own);
+    if (result && g.own) lv_image_set_src(g_big, g_src[g.own]);
+    set_hidden(g_out, !result);
+    if (result) {
+        int t = g.outcome == RPS_WON ? T_GAME_WON : g.outcome == RPS_LOST ? T_GAME_LOST
+              : g.outcome == RPS_DRAW ? T_GAME_DRAW : T_GAME_LATE;
+        set_text(g_out, tr(t));
+        lv_obj_set_style_text_color(g_out, g.outcome == RPS_WON ? lv_color_hex(0x7CDB5A)
+                                         : g.outcome == RPS_LOST ? lv_color_hex(0xFF6A5A) : C_TEXT, 0);
+    }
+    int n = result ? (g.n > G_PEERS ? G_PEERS : g.n) : 0;
+    for (int i = 0; i < G_PEERS; i++) {
+        bool on = i < n;
+        set_hidden(g_peer[i], !on);
+        set_hidden(g_pdot[i], !on);
+        glast.peers[i] = peers[i];
+        if (!on) continue;
+        int x = CX + (2 * i - (n - 1)) * G_PEER_DX / 2;
+        lv_image_set_src(g_peer[i], g_src[g.peers[i].pick]);
+        lv_obj_set_pos(g_peer[i], x - RPS_ICON_PX / 2, 330 - RPS_ICON_PX / 2);
+        lv_obj_set_style_bg_color(g_pdot[i], lv_color_make(g.peers[i].r, g.peers[i].g, g.peers[i].b), 0);
+        lv_obj_set_pos(g_pdot[i], x - 6, 366);
+    }
+}
+
+static void game_refresh(void)
+{
+    glast.phase = -1;
+    game_update();
+}
+
+// A tap: idle or on a result, a new round (and the icon tapped, if any, as the pick); during the countdown, a pick
+static void game_tapped(lv_event_t *e)
+{
+    if (!slide_tap_ok() || !page_shown(PG_GAME)) return;
+    lv_indev_t *in = lv_indev_active();
+    if (!in) return;
+    lv_point_t p;
+    lv_indev_get_point(in, &p);
+    uint8_t pick = RPS_NONE;
+    for (int k = 0; k < 3; k++) {
+        int dx = p.x - g_cx[k], dy = p.y - g_cy[k];
+        if (dx * dx + dy * dy <= G_TAP_R * G_TAP_R) pick = (uint8_t)(k + 1);
+    }
+    static mesh_game_t g;
+    mesh_game_state(&g);
+    ESP_LOGI(TAG, "game tap %s at %d,%d", rps_pick_name(pick), (int)p.x, (int)p.y);
+    if (g.phase == RPS_IDLE || g.phase == RPS_RESULT) {
+        if (!mesh_game_start()) return;
+    } else if (g.phase != RPS_COUNT) {
+        return;                               // collecting: the picks are closed
+    }
+    if (pick) mesh_game_pick(pick);
+    game_update();
+}
+
+static lv_obj_t *icon(lv_obj_t *pg, const lv_image_dsc_t *src)
+{
+    lv_obj_t *o = lv_image_create(pg);
+    lv_image_set_src(o, src);
+    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(o, LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    return o;
+}
+
+static void game_create_page(lv_obj_t *pg)
+{
+    lv_obj_add_flag(pg, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(pg, game_tapped, LV_EVENT_SHORT_CLICKED, NULL);
+    g_ring = shape(pg, DISP_W);
+    lv_obj_set_style_border_width(g_ring, RING_W, 0);
+    lv_obj_set_style_border_opa(g_ring, LV_OPA_COVER, 0);
+    lv_obj_center(g_ring);
+
+    g_arc = lv_arc_create(pg);                // the countdown, over the ring (as main's firmware progress)
+    lv_obj_set_size(g_arc, DISP_W, DISP_H);
+    lv_obj_center(g_arc);
+    lv_arc_set_rotation(g_arc, 270);
+    lv_arc_set_bg_angles(g_arc, 0, 360);
+    lv_arc_set_range(g_arc, 0, 100);
+    lv_obj_set_style_arc_opa(g_arc, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(g_arc, RING_W, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(g_arc, lv_color_white(), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(g_arc, false, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(g_arc, LV_OPA_TRANSP, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(g_arc, 0, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(g_arc, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(g_arc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_arc, LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE | LV_OBJ_FLAG_HIDDEN);
+
+    g_sel = shape(pg, RPS_ICON_PX + 20);      // the own pick's outline during the countdown
+    lv_obj_set_style_border_width(g_sel, 4, 0);
+    lv_obj_set_style_border_color(g_sel, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(g_sel, LV_OPA_COVER, 0);
+    lv_obj_add_flag(g_sel, LV_OBJ_FLAG_HIDDEN);
+    for (int k = 0; k < 3; k++) {
+        g_icon[k] = icon(pg, g_src[k + 1]);
+        lv_obj_set_pos(g_icon[k], g_cx[k] - RPS_ICON_PX / 2, g_cy[k] - RPS_ICON_PX / 2);
+    }
+    g_big = icon(pg, g_src[RPS_ROCK]);        // the result: the own pick, 1.5 x, centred at y 150
+    lv_image_set_scale(g_big, 384);
+    lv_obj_set_pos(g_big, CX - RPS_ICON_PX / 2, 150 - RPS_ICON_PX / 2);
+    lv_obj_add_flag(g_big, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < G_PEERS; i++) {
+        g_peer[i] = icon(pg, g_src[RPS_ROCK]);
+        lv_image_set_scale(g_peer[i], 128);   // half size: 56 px
+        lv_obj_add_flag(g_peer[i], LV_OBJ_FLAG_HIDDEN);
+        g_pdot[i] = shape(pg, 12);
+        lv_obj_set_style_bg_opa(g_pdot[i], LV_OPA_COVER, 0);
+        lv_obj_add_flag(g_pdot[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    g_title = label(pg, f_tiny, C_DIM, 42, 220);   // y 30 touched the ring (snapshot, rc.1)
+    g_word = label(pg, f_mid, C_TEXT, 188, 220);
+    g_out = label(pg, f_mid, C_TEXT, 246, 300);
+    lv_obj_add_flag(g_out, LV_OBJ_FLAG_HIDDEN);
+    g_hint = label(pg, f_small, C_HINT, 372, 260);
+    game_refresh();
+}
+
 /* ---------- the wave loop ----------
  * While mesh_waves() has a wave and main is the page shown with no slide running (slide_tap_ok), the screen is a
  * raw frame (display_raw_frame, tear-free like the slides) filled by wave_fill, up to 30 fps, from an LVGL timer: in
@@ -604,6 +791,7 @@ static void fast_tick(lv_timer_t *t)
     if (on_pager && !wl.drawing) {            // every page: a swipe shows a picture of the neighbours (not during a wave)
         main_update(false);
         pick_update();
+        game_update();
     }
 }
 
@@ -618,6 +806,7 @@ static void page_settled(int page, void *user)
     ESP_LOGI(TAG, "page %s", page >= 0 && page < PG_N ? page_name[page] : "?");
     if (page == PG_SYS) system_refresh();
     else if (page == PG_MAIN) main_update(false);
+    else if (page == PG_GAME) game_refresh();
     else pick_refresh();
 }
 
@@ -629,9 +818,11 @@ static void pager_create_screen(void)
     pg_pick = pager_page(pager, PG_PICK);
     pg_main = pager_page(pager, PG_MAIN);
     pg_sys = pager_page(pager, PG_SYS);
+    pg_game = pager_page(pager, PG_GAME);
     pick_create_page(pg_pick);
     main_create_page(pg_main);
     system_create_page(pg_sys);
+    game_create_page(pg_game);
 }
 
 /* ---------- message ---------- */
@@ -669,6 +860,12 @@ static void show_system_locked(void)
     show_page_locked(PG_SYS);
 }
 
+static void show_game_locked(void)
+{
+    game_refresh();
+    show_page_locked(PG_GAME);
+}
+
 static void show_msg_locked(void) { if (lv_screen_active() != scr_msg) lv_screen_load(scr_msg); }
 
 static bool page_shown(int page) { return lv_screen_active() == scr_pager && pager_current(pager) == page; }
@@ -676,16 +873,19 @@ static bool page_shown(int page) { return lv_screen_active() == scr_pager && pag
 static lv_obj_t *get_pick(void) { return pg_pick; }
 static lv_obj_t *get_main(void) { return pg_main; }
 static lv_obj_t *get_sys(void) { return pg_sys; }
+static lv_obj_t *get_game(void) { return pg_game; }
 static lv_obj_t *get_msg(void) { return scr_msg; }
 static bool shown_pick(void) { return page_shown(PG_PICK); }
 static bool shown_main(void) { return page_shown(PG_MAIN); }
 static bool shown_sys(void) { return page_shown(PG_SYS); }
+static bool shown_game(void) { return page_shown(PG_GAME); }
 static bool shown_msg(void) { return lv_screen_active() == scr_msg; }
 
 static const screen_def_t screens[] = {
     { "pick",    get_pick, show_pick_locked,   pick_refresh,   shown_pick },
     { "main",    get_main, show_main_locked,   main_refresh,   shown_main },
     { "system",  get_sys,  show_system_locked, system_refresh, shown_sys },
+    { "game",    get_game, show_game_locked,   game_refresh,   shown_game },
     { "message", get_msg,  show_msg_locked,    NULL,           shown_msg },
 };
 
@@ -748,5 +948,6 @@ void ui_texts_changed(void)
     pick_refresh();
     main_update(true);
     system_refresh();
+    game_refresh();
     display_unlock();
 }

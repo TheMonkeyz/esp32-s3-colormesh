@@ -24,6 +24,7 @@
 #include "config.h"
 #include "mesh_proto.h"
 #include "mesh_fw.h"
+#include "rps.h"
 
 static const char *TAG = "mesh";
 static const char *TAG_BLE = "ble";
@@ -84,6 +85,13 @@ static struct {
     uint32_t last_ms;
 } eff[MP_MAX_PEERS];                    // mesh task only
 static const char *const wave_names[] = { "none", "centre", "left", "right", "top", "bottom" };
+
+// Rock paper scissors (mesh_game_*): the round, the result frozen when the collect phase ends
+static rps_round_t game;                // under table_lock
+static uint8_t game_seq_own;            // under table_lock: the last round seq this board started
+static bool game_frozen;                // under table_lock: game_res holds this round's result
+static mesh_game_t game_res;            // under table_lock
+static uint8_t game_adv[4];             // mesh task only: the game bytes last advertised (seq, starter, left, pick)
 
 static uint8_t adv_buf[MP_AD_SIZE];     // under radio_lock
 static uint8_t seq;                     // mesh task only
@@ -283,6 +291,11 @@ static void do_refresh(void)
     bool h = holding;
     uint8_t buf[MP_AD_SIZE];
     xSemaphoreTake(table_lock, portMAX_DELAY);
+    rps_advert(&game, now_ms(), &s.game_starter, &s.game_seq, &s.game_left, &s.game_pick);
+    game_adv[0] = s.game_seq;
+    game_adv[1] = s.game_starter;
+    game_adv[2] = s.game_left;
+    game_adv[3] = s.game_pick;
     mp_table_set_self(&table, &s, h);
     s = table.self;                                  // with the holding bit
     xSemaphoreGive(table_lock);
@@ -423,6 +436,67 @@ static void peer_effect(const uint8_t addr[6], const mp_state_t *st, uint32_t no
     ESP_LOGI(TAG, "wave %s from %s%s", mesh_wave_name(st->effect), a, b2_note(note, b2));
 }
 
+// One decoded report: a new round with time left is joined (rps_join decides), with the reveal at the time heard
+static void game_peer(const uint8_t addr[6], const mp_state_t *st, uint32_t now)
+{
+    if (!st->game_seq || !st->game_left) return;
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    bool joined = rps_join(&game, st->game_starter, st->game_seq, st->game_left, now);
+    if (joined) game_frozen = false;
+    uint8_t own = game.own;
+    xSemaphoreGive(table_lock);
+    if (!joined) return;
+    char a[18];
+    fmt_addr(a, sizeof(a), addr);
+    ESP_LOGI(TAG, "game join %02x/%u from %s, reveal in %d ms, pick %s", st->game_starter, st->game_seq, a,
+             st->game_left * RPS_LEFT_UNIT_MS, rps_pick_name(own));
+    refresh_req = true;
+}
+
+// Under table_lock: the peers' picks in this round, and the outcome
+static void game_freeze_locked(void)
+{
+    mesh_game_t *g = &game_res;
+    memset(g, 0, sizeof(*g));
+    uint8_t picks[MP_MAX_PEERS];
+    for (int i = 0; i < MP_MAX_PEERS && g->n < MESH_GAME_PEERS; i++) {
+        const mp_peer_t *p = &table.peers[i];
+        if (!p->used || p->st.game_seq != game.seq || p->st.game_starter != game.starter) continue;
+        if (p->st.game_pick < RPS_ROCK || p->st.game_pick > RPS_SCISSORS) continue;
+        g->peers[g->n] = (mesh_game_peer_t){ p->st.game_pick, p->st.r, p->st.g, p->st.b };
+        picks[g->n++] = p->st.game_pick;
+    }
+    g->own = game.own;
+    g->outcome = rps_outcome(game.own, picks, g->n);
+    g->phase = RPS_RESULT;
+}
+
+// Every tick: the result once the collect phase is over, the round marked done, and whether the advert's game bytes
+// must change (the time left moves every RPS_LEFT_UNIT_MS)
+static bool game_tick(uint32_t now)
+{
+    uint8_t b[4];
+    bool logres = false;
+    mesh_game_t res;
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    rps_advert(&game, now, &b[1], &b[0], &b[2], &b[3]);
+    if (rps_phase(&game, now) == RPS_RESULT && !game_frozen) {
+        game_freeze_locked();
+        game_frozen = true;
+        res = game_res;
+        logres = true;
+    }
+    rps_tick(&game, now);
+    xSemaphoreGive(table_lock);
+    if (logres) {
+        int k[4] = { 0 };
+        for (int i = 0; i < res.n; i++) k[res.peers[i].pick]++;
+        ESP_LOGI(TAG, "game result %s: own %s, peers rock %d paper %d scissors %d", rps_outcome_name(res.outcome),
+                 rps_pick_name(res.own), k[RPS_ROCK], k[RPS_PAPER], k[RPS_SCISSORS]);
+    }
+    return memcmp(b, game_adv, sizeof(b)) != 0;
+}
+
 static void mesh_task(void *arg)
 {
     const TickType_t period = pdMS_TO_TICKS(TICK_MS);
@@ -447,6 +521,7 @@ static void mesh_task(void *arg)
                 dirty |= mp_table_update(&table, r.addr, &st, r.rssi, now_ms());
                 xSemaphoreGive(table_lock);
                 peer_effect(r.addr, &st, now_ms());
+                game_peer(r.addr, &st, now_ms());
             } while (xQueueReceive(q, &r, 0) == pdTRUE);
         }
         if (effect_req) {                                // mesh_start_wave: the effect into the advert, for 1 s
@@ -482,6 +557,7 @@ static void mesh_task(void *arg)
                 do_refresh();
                 dirty = true;
             }
+            if (game_tick(now_ms())) do_refresh();       // the round's bytes (time left, pick, end)
             bool ended = false;
             uint32_t t = now_ms();
             xSemaphoreTake(table_lock, portMAX_DELAY);
@@ -805,6 +881,51 @@ int mesh_waves(wave_t *out, int max, uint32_t now_ms)
     }
     xSemaphoreGive(table_lock);
     return n;
+}
+
+bool mesh_game_start(void)
+{
+    if (!table_lock) return false;
+    uint32_t now = now_ms();
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    uint8_t s = (uint8_t)(game_seq_own + 1);
+    if (!s) s = 1;                                   // seq 0 means no round
+    bool ok = rps_start(&game, own_origin, s, now);
+    if (ok) game_seq_own = s, game_frozen = false;
+    xSemaphoreGive(table_lock);
+    if (!ok) return false;
+    ESP_LOGI(TAG, "game start %02x/%u, reveal in %d ms", own_origin, s, RPS_COUNT_MS);
+    refresh_req = true;
+    wake();
+    return true;
+}
+
+bool mesh_game_pick(uint8_t pick)
+{
+    if (!table_lock) return false;
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    bool ok = rps_pick(&game, pick, now_ms());
+    xSemaphoreGive(table_lock);
+    if (!ok) return false;
+    ESP_LOGI(TAG, "game pick %s", rps_pick_name(pick));
+    refresh_req = true;
+    wake();
+    return true;
+}
+
+void mesh_game_state(mesh_game_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!table_lock) return;
+    uint32_t now = now_ms();
+    xSemaphoreTake(table_lock, portMAX_DELAY);
+    rps_phase_t ph = rps_phase(&game, now);
+    if (ph == RPS_RESULT && game_frozen) *out = game_res;
+    out->phase = ph == RPS_RESULT && !game_frozen ? RPS_COLLECT : ph;   // the mesh task freezes it within a tick
+    out->ms_left = rps_ms_left(&game, now);
+    out->own = game.own;
+    xSemaphoreGive(table_lock);
 }
 
 uint8_t mesh_own_origin(void) { return own_origin; }

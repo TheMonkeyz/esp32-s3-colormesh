@@ -5,6 +5,11 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.5.0-rc.1 - 2026-11-01
+- Rock paper scissors: swipe left twice from the main screen. Tap to start a round on every board near you; "Rock,
+  Paper, Scissors!" counts down 3 s; tap your pick before 0; every board shows the result at the same moment (your
+  pick, won / lost / draw, the others' picks with their colour). Console: `game`, `game start`, `game pick <x>`.
+
 ## v0.4.0 - 2026-11-01
 Fourth release. Everything in v0.3.0 plus:
 - Secure updates for boards not in dev mode: make one board the admin (`admin on`, or the USB card), paste its key

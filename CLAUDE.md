@@ -104,6 +104,8 @@ Add each preference the user states (gestures, wording, timing, look) with the d
 - 2026-10-31, waves (from mockups): bicolour waves started by a TAP on the main screen (centre = rings outward;
   left / right / top / bottom zones = bands moving in from that side); colour B = the opposite hue of the own
   colour, nothing to set; waves from several boards merge per pixel like the colours; a hold still adds its colour.
+- 2026-11-01, rock paper scissors (from mockups): **countdown flow** ("B"): one tap starts a 3 s count on every
+  board, everyone picks before 0, all reveal together (not "free pick then wait for everyone"). Page right of system.
 - 2026-11-01, secure updates: the user chose a **paired admin board** over signed releases. The admin board holds an
   ECDSA P-256 key pair (private key in plain NVS: whoever holds the admin board can push firmware; said to the
   user); other boards store its public key once over USB (`trust <base64>`); a board not in dev mode pulls only
@@ -128,5 +130,8 @@ rediscover.
 - The flash helper opens the port about 3 s into the boot: `ble: synced` (2.5 s) is not in the log window. A
   command that must reach the board before the first transfer (3.5 s) goes right after the first logged line
   (`fw: serving`, `diag: firmware`), and the transfer then still obeys a live knob.
+- `build\v55\CMakeCache.txt` can hold a cached `PROJECT_VER` (it held v0.4.0 on 2026-11-01): it beats
+  `version.txt`, so a test build kept the old label. Pass `-D PROJECT_VER=<label>` or check the
+  `App "colormesh" version:` line of the build before flashing.
 - A board with a label the peers already hold does not serve them again (`not newer`): every build the boards pull
   consumes its label (rc.2-rc.4 on 2026-10-31). Probe before letting a full pull complete.
