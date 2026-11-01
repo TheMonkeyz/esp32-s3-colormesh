@@ -18,16 +18,20 @@ void clip_rec_begin(void);                  // the finger went down on the voice
 void clip_rec_end(bool send);               // it went up (send) or the press was lost (!send: the clip is dropped)
 bool clip_send_last(void);                  // send the last recorded clip again (console)
 bool clip_play_last(void);                  // play the last recorded clip here (console)
-void clip_ring(void);                       // call the others
+void clip_ring(void);                       // call the others ("Calling" here until one answers or they stop ringing)
+void clip_call_cancel(void);                // close the outgoing call's screen (a tap on it)
 void clip_ring_local(void);                 // ring here (console: try the tone)
-void clip_ring_stop(void);                  // the screen was tapped while ringing
+void clip_ring_stop(bool answer);           // stop ringing; answer: tell the caller (a tap on the screen)
 
 typedef enum { CLIP_IDLE, CLIP_REC, CLIP_SENDING, CLIP_PLAYING, CLIP_RINGING } clip_phase_t;
+typedef enum { CLIP_CALL_NONE, CLIP_CALL_OUT, CLIP_CALL_ANSWERED } clip_call_t;   // this board's outgoing call
 typedef struct {
     clip_phase_t phase;
     uint32_t rec_ms;                        // CLIP_REC: recorded so far
     int send_pct;                           // CLIP_SENDING: 0..100
     uint8_t r, g, b;                        // CLIP_PLAYING / CLIP_RINGING: the sender's colour
     bool receiving;                         // a peer's clip is being collected
+    clip_call_t call;
+    uint8_t ans_r, ans_g, ans_b;            // CLIP_CALL_ANSWERED: the colour of the board that answered
 } clip_state_t;
 void clip_get_state(clip_state_t *out);

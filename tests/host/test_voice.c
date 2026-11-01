@@ -180,6 +180,34 @@ static void test_ringtone(void)
     CHECK(quiet == 0, "%d quiet 5 ms windows inside the phrase", quiet);
 }
 
+// The caller's "answered" sound: 320 ms, three notes rising A5 C#6 E6, each note's window matching its own pitch
+static void test_answered(void)
+{
+    uint32_t n = ringtone_seq_samples(ringtone_answered, ringtone_n_answered);
+    CHECK(n == RINGTONE_RATE * 320 / 1000, "answered sound %u samples", (unsigned)n);
+    static int16_t out[RINGTONE_RATE];
+    ringtone_t t;
+    ringtone_init_seq(&t, ringtone_answered, ringtone_n_answered);
+    size_t got = 0, k;
+    while ((k = ringtone_render(&t, out + got, 512, 12000)) > 0) got += k;
+    CHECK(got == n, "rendered %zu of %u", got, (unsigned)n);
+    uint32_t start = 0;
+    for (int i = 0; i < ringtone_n_answered; i++) {
+        uint32_t len = ringtone_answered[i].ms * RINGTONE_RATE / 1000, a = start + len / 5, w = len * 3 / 5;
+        int best = -1;
+        double best_lv = 0;
+        for (int j = 0; j < ringtone_n_answered; j++) {   // the pitch whose partials carry the most
+            double lv = 0;
+            for (int p = 1; p * ringtone_answered[j].freq_hz < 7800; p++)
+                lv += tone_level(out + a, w, p * ringtone_answered[j].freq_hz);
+            if (lv > best_lv) best_lv = lv, best = j;
+        }
+        CHECK(best == i, "note %d sounds as note %d", i, best);
+        if (i) CHECK(ringtone_answered[i].freq_hz > ringtone_answered[i - 1].freq_hz, "rising");
+        start += len;
+    }
+}
+
 int main(void)
 {
     test_adpcm();
@@ -187,5 +215,6 @@ int main(void)
     test_assemble();
     test_ids();
     test_ringtone();
+    test_answered();
     return check_done("voice");
 }

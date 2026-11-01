@@ -715,10 +715,8 @@ static void game_create_page(lv_obj_t *pg)
 #define V_BTN_H    56
 #define V_BTN_Y    326
 #define C_REC      lv_color_hex(0xFF3B30)
-#define CALL_SENT_MS 2000
 
-static int64_t call_sent_until;               // esp_timer us: "Call sent" until then
-static struct { int phase, tenths, pct; bool recv, sent; uint32_t own; } vlast = { .phase = -1 };
+static struct { int phase, tenths, pct; bool recv; uint32_t own; } vlast = { .phase = -1 };
 
 static void voice_update(void)
 {
@@ -727,12 +725,11 @@ static void voice_update(void)
     const app_cfg_t *c = config_get();
     uint32_t own = (uint32_t)c->r << 16 | (uint32_t)c->g << 8 | c->b;
     int tenths = (int)(cs.rec_ms / 100);
-    bool sent = esp_timer_get_time() < call_sent_until;
     if (cs.phase == vlast.phase && tenths == vlast.tenths && cs.send_pct == vlast.pct && cs.receiving == vlast.recv &&
-        sent == vlast.sent && own == vlast.own)
+        own == vlast.own)
         return;
     vlast.phase = cs.phase, vlast.tenths = tenths, vlast.pct = cs.send_pct, vlast.recv = cs.receiving;
-    vlast.sent = sent, vlast.own = own;
+    vlast.own = own;
 
     bool rec = cs.phase == CLIP_REC, sending = cs.phase == CLIP_SENDING;
     lv_obj_set_style_border_color(v_ring, lv_color_hex(own), 0);
@@ -745,7 +742,7 @@ static void voice_update(void)
     set_text(v_secs, buf);
     lv_obj_set_style_text_color(v_secs, rec || bright(own) ? C_DARK : C_TEXT, 0);
     set_hidden(v_secs, !rec);
-    int hint = sending ? T_VOICE_SENDING : cs.receiving ? T_VOICE_RECEIVING : sent ? T_CALL_SENT : T_VOICE_HINT;
+    int hint = sending ? T_VOICE_SENDING : cs.receiving ? T_VOICE_RECEIVING : T_VOICE_HINT;
     set_text(v_hint, tr(hint));
     set_text(v_title, tr(T_VOICE_TITLE));
     set_text(v_btn_l, tr(T_CALL));
@@ -770,9 +767,7 @@ static void call_tapped(lv_event_t *e)
 {
     if (!slide_tap_ok() || !page_shown(PG_VOICE)) return;
     ESP_LOGI(TAG, "call tapped");
-    clip_ring();
-    call_sent_until = esp_timer_get_time() + CALL_SENT_MS * 1000LL;
-    voice_update();
+    clip_ring();                              // "Calling…" on the overlay until an answer
 }
 
 static void voice_create_page(lv_obj_t *pg)
@@ -823,10 +818,14 @@ static void voice_create_page(lv_obj_t *pg)
     voice_refresh();
 }
 
+// A tap: answers an incoming call; closes the outgoing call's screen; nothing while a clip plays
 static void overlay_tapped(lv_event_t *e)
 {
+    clip_state_t cs;
+    clip_get_state(&cs);
     ESP_LOGI(TAG, "overlay tapped");
-    clip_ring_stop();
+    if (cs.phase == CLIP_RINGING) clip_ring_stop(true);
+    else if (cs.phase != CLIP_PLAYING) clip_call_cancel();
 }
 
 static void overlay_create(void)
@@ -847,23 +846,31 @@ static void overlay_create(void)
     ov_body = label(ov, f_small, C_DIM, 230, 300);
 }
 
-// Shown while a clip plays or a call rings (any screen), in the sender's colour
+// Shown while a clip plays or a call rings here (any screen, the sender's colour), and while this board's own call
+// is out ("Calling…", the own colour) or was answered ("Answered", the colour of the board that answered)
 static void overlay_update(void)
 {
+    static const char *const names[] = { "off", "message", "call", "calling", "answered" };
+    static int last;
     clip_state_t cs;
     clip_get_state(&cs);
-    bool on = cs.phase == CLIP_PLAYING || cs.phase == CLIP_RINGING;
-    bool shown = !lv_obj_has_flag(ov, LV_OBJ_FLAG_HIDDEN);
-    if (on) {
-        lv_obj_set_style_border_color(ov_ring, lv_color_make(cs.r, cs.g, cs.b), 0);
-        bool call = cs.phase == CLIP_RINGING;
-        set_text(ov_title, tr(call ? T_CALL_IN : T_MSG_IN));
-        set_text(ov_body, tr(call ? T_CALL_STOP : T_MSG_PLAYING));
+    int mode = cs.phase == CLIP_PLAYING ? 1 : cs.phase == CLIP_RINGING ? 2
+             : cs.call == CLIP_CALL_OUT ? 3 : cs.call == CLIP_CALL_ANSWERED ? 4 : 0;
+    if (mode) {
+        const app_cfg_t *c = config_get();
+        lv_color_t col = mode == 3 ? lv_color_make(c->r, c->g, c->b)
+                       : mode == 4 ? lv_color_make(cs.ans_r, cs.ans_g, cs.ans_b) : lv_color_make(cs.r, cs.g, cs.b);
+        static const int title[] = { 0, T_MSG_IN, T_CALL_IN, T_CALL_OUT, T_CALL_ANSWERED };
+        static const int body[] = { 0, T_MSG_PLAYING, T_CALL_ANSWER, T_CALL_CANCEL, T_CALL_CANCEL };
+        lv_obj_set_style_border_color(ov_ring, col, 0);
+        set_text(ov_title, tr(title[mode]));
+        set_text(ov_body, tr(body[mode]));
     }
-    if (on == shown) return;
-    set_hidden(ov, !on);
-    ESP_LOGI(TAG, "overlay %s", on ? (cs.phase == CLIP_RINGING ? "call" : "message") : "off");
-    if (!on) lv_obj_invalidate(lv_screen_active());
+    if (mode == last) return;
+    last = mode;
+    set_hidden(ov, !mode);
+    ESP_LOGI(TAG, "overlay %s", names[mode]);
+    if (!mode) lv_obj_invalidate(lv_screen_active());
 }
 
 /* ---------- the wave loop ----------

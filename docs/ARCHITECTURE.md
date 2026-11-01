@@ -214,8 +214,9 @@ Estimates from the research (to replace with `idf.py size` and the `heap` comman
 | `mesh: clip <id> from <addr>, <s> s` | A peer announced a new clip |
 | `clip: clip <id> from <origin> complete, <bytes> bytes, 0 holes`, `clip: played <s> s` | Received whole, then played |
 | `clip: clip <id> from <origin>: <n> chunks missing, dropped` (or `no sync`, `CRC mismatch`) | Received in part: not played |
-| `mesh: ring from self\|<addr>`, `clip: ring end after <n>, tapped\|not answered` | A call sent / heard, and how it ended |
-| `ui: overlay message\|call\|off` | The incoming clip or call screen |
+| `mesh: ring from self\|<addr>`, `clip: ring end after <n>, answered\|stopped\|not answered` | A call sent / heard, and how it ended |
+| `mesh: answer to <origin>` / `mesh: answer from <addr>`, `clip: call answered by <origin>`, `clip: answered sound played`, `clip: call not answered` | The answer sent / received by the caller |
+| `ui: overlay message\|call\|calling\|answered\|off` | The incoming clip or call screen |
 | `diag: mark app ready` | `forge.json` `ready_line` |
 
 ## Known issues / TODO
@@ -288,8 +289,14 @@ every board, not one link per board).
   once every chunk is in and the CRC-32 matches. No sync within 4 s, a lost train or a bad CRC drops it
   (`clip: … dropped`). One hop only: a board out of the sender's range gets nothing.
 - **Call**: the Call button (or `ring`) sends effect `MP_EFFECT_RING` (6) with a new effect seq for 1 s, like a wave,
-  through the flood. Every other board rings and shows "Appel entrant" in the caller's colour; a tap stops it, else
-  3 phrases with 3.2 s between them.
+  through the flood. Every other board rings and shows "Appel entrant" / "Toucher l'écran pour répondre" in the
+  caller's colour, 3 phrases with 3.2 s between them. A tap answers: effect `MP_EFFECT_ANSWER` (7) with byte 28 =
+  the caller's origin, for 1 s (`mesh_answer`). The caller shows "Appel en cours…" in its own colour for the callees'
+  whole ring + 2 s, and on the first answer "Appel répondu" in the answerer's colour for 4 s with the doo-di-dit
+  (`ringtone_answered`: A5 90 ms, C#6 90 ms, E6 140 ms, the same buzzer synth; the user's pick of ten). Later
+  answers are ignored; a tap on the caller's screen closes it (rc.5: C answered A, then B 2 s later).
+- **Speaker wake-up**: every sound starts with 250 ms of silence after `esp_codec_dev_open` (rc.3 lost the ring's
+  first note, 117 ms, while the amplifier and the DAC woke up).
 - **Ring tone** (`ringtone.c`): the timing and timbre measured from a recording of the old phone the user supplied:
   eighths 117 ms, quarters 242 ms, the last note 813 ms, legato; each partial below 7.8 kHz at the level the
   recording has at its frequency (two buzzer resonances near 2.9 and 5.2 kHz; the note's own pitch is 26-47 dB

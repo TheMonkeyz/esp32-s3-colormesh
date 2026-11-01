@@ -73,6 +73,8 @@ static volatile uint32_t mix_packed;    // 0x00rrggbb of the last mix
 static volatile mesh_gap_hook_t gap_hook;
 static volatile mesh_clip_cb_t clip_cb;     // clip.c: a peer announced a new clip
 static volatile mesh_ring_cb_t ring_cb;     // clip.c: a peer calls
+static volatile mesh_ring_cb_t answer_cb;   // clip.c: a peer answered this board's call
+static volatile uint8_t own_answer_to;       // byte 28 with MP_EFFECT_ANSWER: the caller answered
 
 // Voice clips: the own bytes 26-27 and MP_F_CLIP; per peer address the last clip id handed to clip_cb
 static volatile uint8_t own_clip_id, own_clip_ds;
@@ -339,6 +341,7 @@ static void do_refresh(void)
     s.flags = (dev_mode ? MP_F_DEV : 0) | (admin ? MP_F_ADMIN : 0) | (own_clip_on ? MP_F_CLIP : 0) | ota_flags();
     s.clip_id = own_clip_id;
     s.clip_ds = own_clip_ds;
+    s.answer_to = own_effect == MP_EFFECT_ANSWER ? own_answer_to : 0;
     s.r = own_r;
     s.g = own_g;
     s.b = own_b;
@@ -491,6 +494,13 @@ static void peer_effect(const uint8_t addr[6], const mp_state_t *st, uint32_t no
     eff[k].seq = st->effect_seq;
     fmt_addr(a, sizeof(a), addr);
     ESP_LOGD(TAG_BLE, "effect %s %u (seq %u)", a, st->effect, st->effect_seq);
+    if (st->effect == MP_EFFECT_ANSWER) {
+        if (st->answer_to != own_origin) return;      // it answers another board's call
+        ESP_LOGI(TAG, "answer from %s", a);
+        mesh_ring_cb_t cb = answer_cb;
+        if (cb) cb(st->origin, st->r, st->g, st->b);
+        return;
+    }
     if (st->effect == MP_EFFECT_RING) {
         ESP_LOGI(TAG, "ring from %s", a);
         mesh_ring_cb_t cb = ring_cb;
@@ -981,10 +991,20 @@ void mesh_set_clip(uint8_t id, uint8_t ds, bool on)
     wake();
 }
 
-void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring)
+void mesh_answer(uint8_t caller)
+{
+    ESP_LOGI(TAG, "answer to %02x", caller);
+    own_answer_to = caller;
+    effect_kind_req = MP_EFFECT_ANSWER;
+    effect_req = true;
+    wake();
+}
+
+void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring, mesh_ring_cb_t answer)
 {
     clip_cb = clip;
     ring_cb = ring;
+    answer_cb = answer;
 }
 
 int mesh_waves(wave_t *out, int max, uint32_t now_ms)

@@ -21,6 +21,9 @@ const ringtone_note_t ringtone_notes[] = {
 };
 const int ringtone_n_notes = sizeof(ringtone_notes) / sizeof(ringtone_notes[0]);
 
+const ringtone_note_t ringtone_answered[] = { { 880, 90 }, { 1109, 90 }, { 1319, 140 } };   // A5 C#6 E6
+const int ringtone_n_answered = sizeof(ringtone_answered) / sizeof(ringtone_answered[0]);
+
 // The buzzer's response: a partial's amplitude in the recording, every 250 Hz from 625 Hz (measured, the 3125 Hz
 // bin filled between its neighbours)
 static const float resp[] = {
@@ -41,26 +44,32 @@ static float response(float hz)
     return resp[i] + (resp[i + 1] - resp[i]) * (x - i);
 }
 
-static uint32_t note_len(int i) { return (uint32_t)ringtone_notes[i].ms * RINGTONE_RATE / 1000; }
+static uint32_t len_of(const ringtone_note_t *n) { return (uint32_t)n->ms * RINGTONE_RATE / 1000; }
 
-uint32_t ringtone_samples(void)
+uint32_t ringtone_seq_samples(const ringtone_note_t *seq, int n)
 {
-    uint32_t n = 0;
-    for (int i = 0; i < ringtone_n_notes; i++) n += note_len(i);
-    return n;
+    uint32_t s = 0;
+    for (int i = 0; i < n; i++) s += len_of(&seq[i]);
+    return s;
 }
 
-void ringtone_init(ringtone_t *t)
+uint32_t ringtone_samples(void) { return ringtone_seq_samples(ringtone_notes, ringtone_n_notes); }
+
+void ringtone_init_seq(ringtone_t *t, const ringtone_note_t *seq, int n)
 {
+    t->seq = seq;
+    t->n_seq = n;
     t->pos = 0;
     t->phase = 0;
     t->note = -1;
 }
 
+void ringtone_init(ringtone_t *t) { ringtone_init_seq(t, ringtone_notes, ringtone_n_notes); }
+
 // A new note: its partials' levels, scaled so that the note's RMS is RMS
 static void note_setup(ringtone_t *t, int i)
 {
-    float f = ringtone_notes[i].freq_hz, sq = 0;
+    float f = t->seq[i].freq_hz, sq = 0;
     t->note = i;
     t->np = 0;
     for (int k = 1; k <= RINGTONE_PARTIALS && k * f < PARTIAL_MAX_HZ; k++) {
@@ -79,10 +88,10 @@ size_t ringtone_render(ringtone_t *t, int16_t *out, size_t n, int16_t amp)
     while (done < n) {
         uint32_t start = 0;
         int i = 0;
-        while (i < ringtone_n_notes && t->pos >= start + note_len(i)) start += note_len(i++);
-        if (i == ringtone_n_notes) break;           // the phrase is over
+        while (i < t->n_seq && t->pos >= start + len_of(&t->seq[i])) start += len_of(&t->seq[i++]);
+        if (i == t->n_seq) break;                   // the sequence is over
         if (i != t->note) note_setup(t, i);
-        uint32_t len = note_len(i), at = t->pos - start;
+        uint32_t len = len_of(&t->seq[i]), at = t->pos - start;
         float g = 1.0f;
         if (at < FADE) g = (float)at / FADE;
         else if (len - at <= FADE) g = (float)(len - at) / FADE;
@@ -91,7 +100,7 @@ size_t ringtone_render(ringtone_t *t, int16_t *out, size_t n, int16_t amp)
         if (s > 1.0f) s = 1.0f;
         else if (s < -1.0f) s = -1.0f;
         out[done++] = (int16_t)(s * g * amp);
-        t->phase += two_pi * ringtone_notes[i].freq_hz / RINGTONE_RATE;
+        t->phase += two_pi * t->seq[i].freq_hz / RINGTONE_RATE;
         if (t->phase >= two_pi) t->phase -= two_pi;
         t->pos++;
     }

@@ -12,7 +12,7 @@
 //   22-25 rock paper scissors (rps.h): 22 round seq (0 = no round), 23 the round's starter origin, 24 time left to
 //   the reveal in RPS_LEFT_UNIT_MS steps (0 after it), 25 the sender's pick (rps_pick_t) · 26 voice clip id (bumped
 //   per clip, wrap-aware; sent with MP_F_CLIP while the clip's periodic train runs, clip.c) · 27 the clip's length
-//   in 100 ms steps · 28-29 reserved, zero.
+//   in 100 ms steps · 28 with effect MP_EFFECT_ANSWER: the origin of the caller answered (else 0) · 29 reserved, zero.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -42,6 +42,7 @@
 #define MP_EFFECT_WAVE_TOP      4
 #define MP_EFFECT_WAVE_BOTTOM   5
 #define MP_EFFECT_RING          6   // a call: every board that hears it rings (clip.c), no wave
+#define MP_EFFECT_ANSWER        7   // an answer to the call of the board in byte 28 (clip.c)
 #define MP_MAX_PEERS    16
 #define MP_HOLD_EXPIRY_MS 250     // 3 x 20 ms + 100 ms margin, rounded; 400 once the 100 ms interval is in use
 #define MP_PEER_EXPIRY_MS 10000
@@ -56,6 +57,7 @@ typedef struct mp_state {
     uint8_t origin, seq, ttl, flags, r, g, b, ver[4], target, effect, effect_seq, b2r, b2g, b2b;
     uint8_t game_seq, game_starter, game_left, game_pick;
     uint8_t clip_id, clip_ds;         // bytes 26-27 (not part of mp_table_update's "changed" either)
+    uint8_t answer_to;                // byte 28 (idem)
 } mp_state_t;
 
 // The AD structure into buf: MP_AD_SIZE, or -1 if cap is smaller (or an argument is NULL)

@@ -114,6 +114,9 @@ Add each preference the user states (gestures, wording, timing, look) with the d
   once**, clips sent by **multicast** (BLE 5 periodic advertising, not one link per board); a Call button rings the
   others with the classic phone tune. The ring must sound like the user's recording of the old phone (buzzer timbre,
   no rasp), with a **sharp end, not a fade**.
+- 2026-11-01, calls: the ringing board says "Toucher l'écran pour répondre" (not "pour arrêter"); the caller must
+  see when a callee answers, with a sound: the user picked **#6 of ten, a rising doo-di-dit (A5 C#6 E6)** in the
+  ring's buzzer sound.
 
 ## Useful facts
 

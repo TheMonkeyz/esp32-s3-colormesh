@@ -38,12 +38,16 @@ static const char *TAG = "clip";
 #define VOLUME       80
 #define RING_AMP     20000                  // the tone's notes sit at 0.3 of this (RMS), its peaks up to it
 #define RING_GAP_MS  3200                   // between the phrases, as the old phone
+#define SPK_PREROLL_MS 250                   // silence after the speaker opens, before the sound
+#define CALLER_NONE  -1
+#define CALL_OUT_MS  ((CLIP_RING_TIMES * 2970 + (CLIP_RING_TIMES - 1) * RING_GAP_MS) + 2000)   // the callees' ring, + margin
+#define ANSWERED_MS  4000                   // "Answered" stays this long
 #define PER_ITVL     8                      // periodic interval, 1.25 ms units: 10 ms
 #define SYNC_WAIT_MS 4000                   // no sync to the sender's train by then: give up
 #define SYNC_TIMEOUT 100                    // 10 ms units: the train is lost after 1 s without a packet
 
 typedef enum { EV_REC_END, EV_REC_DROP, EV_SEND, EV_PLAY_LAST, EV_RING_IN, EV_RING_LOCAL, EV_RX_START, EV_RX_DONE,
-               EV_RX_LOST } ev_kind_t;
+               EV_RX_LOST, EV_ANSWERED } ev_kind_t;
 typedef struct {
     ev_kind_t kind;
     uint8_t addr[6], origin, id, rgb[3];
@@ -56,7 +60,8 @@ static bool mic_ok;
 
 static int16_t *rec_pcm, *play_pcm;         // REC_MAX mono samples each
 static uint8_t *tx_buf, *rx_buf;            // CLIP_MAX_BYTES each
-static volatile bool recording, ring_stop;
+static volatile bool recording, ring_stop, ring_answer;
+static volatile int64_t call_until, answered_until;   // esp_timer us: the outgoing call's screens (0 = none)
 static uint32_t rec_n;                      // clip task: samples recorded
 static uint32_t tx_len;                     // clip task: the last clip's ADPCM bytes (0 = none)
 static uint8_t tx_id, tx_ds;
@@ -97,15 +102,6 @@ static bool spk_open(void)
     return spk != NULL;
 }
 
-static bool spk_begin(void)
-{
-    if (!spk_open()) { ESP_LOGW(TAG, "no speaker"); return false; }
-    esp_codec_dev_sample_info_t fs = { .sample_rate = RATE, .channel = 2, .bits_per_sample = 16 };
-    if (esp_codec_dev_open(spk, &fs) != ESP_CODEC_DEV_OK) { ESP_LOGW(TAG, "speaker open failed"); return false; }
-    esp_codec_dev_set_out_vol(spk, VOLUME);
-    return true;
-}
-
 // n mono samples out, doubled to stereo in blocks
 static void spk_write(const int16_t *mono, size_t n)
 {
@@ -115,6 +111,22 @@ static void spk_write(const int16_t *mono, size_t n)
         for (size_t j = 0; j < k; j++) st2[2 * j] = st2[2 * j + 1] = mono[i + j];
         esp_codec_dev_write(spk, st2, k * 2 * sizeof(int16_t));
     }
+}
+
+static void spk_silence(int ms)
+{
+    static const int16_t zero[256];
+    for (int n = RATE * ms / 1000; n > 0; n -= 256) spk_write(zero, n < 256 ? n : 256);
+}
+
+static bool spk_begin(void)
+{
+    if (!spk_open()) { ESP_LOGW(TAG, "no speaker"); return false; }
+    esp_codec_dev_sample_info_t fs = { .sample_rate = RATE, .channel = 2, .bits_per_sample = 16 };
+    if (esp_codec_dev_open(spk, &fs) != ESP_CODEC_DEV_OK) { ESP_LOGW(TAG, "speaker open failed"); return false; }
+    esp_codec_dev_set_out_vol(spk, VOLUME);
+    spk_silence(SPK_PREROLL_MS);                     // the amplifier and the DAC wake up on silence (rc.3 lost the
+    return true;                                     // ring's first note, 117 ms, without it)
 }
 
 static void spk_end(void) { esp_codec_dev_close(spk); }   // amplifier off between sounds
@@ -144,11 +156,13 @@ static void play_adpcm(const uint8_t *code, uint32_t len, const uint8_t rgb[3])
     play_pcm_n(play_pcm, len * 2, rgb);
 }
 
-static void ring(const uint8_t rgb[3])
+// A call rings here; `caller` is the calling board's origin (CALLER_NONE for "ring local"). A tap answers: the
+// answer goes back through the flood (mesh_answer) so the caller sees it
+static void ring(const uint8_t rgb[3], int caller)
 {
     st.r = rgb[0], st.g = rgb[1], st.b = rgb[2];
     set_phase(CLIP_RINGING);
-    ring_stop = false;
+    ring_answer = ring_stop = false;
     if (!spk_begin()) { set_phase(CLIP_IDLE); return; }
     int times = 0;
     for (; times < CLIP_RING_TIMES && !ring_stop; times++) {
@@ -156,14 +170,25 @@ static void ring(const uint8_t rgb[3])
         ringtone_init(&t);
         size_t k;
         while (!ring_stop && (k = ringtone_render(&t, play_pcm, 512, RING_AMP)) > 0) spk_write(play_pcm, k);
-        for (int g = 0; g < RING_GAP_MS / 16 && !ring_stop; g++) {   // a silent gap between the phrases
-            memset(play_pcm, 0, 256 * sizeof(int16_t));
-            spk_write(play_pcm, 256);
-        }
+        for (int g = 0; g < RING_GAP_MS / 16 && !ring_stop; g++) spk_silence(16);   // the gap between phrases
     }
     spk_end();
-    ESP_LOGI(TAG, "ring end after %d, %s", times, ring_stop ? "tapped" : "not answered");
+    bool answered = ring_stop && ring_answer;
+    ESP_LOGI(TAG, "ring end after %d, %s", times, answered ? "answered" : ring_stop ? "stopped" : "not answered");
+    if (answered && caller != CALLER_NONE) mesh_answer((uint8_t)caller);
     set_phase(CLIP_IDLE);
+}
+
+// The caller's "answered" sound (ringtone_answered)
+static void play_answered(void)
+{
+    if (!spk_begin()) return;
+    ringtone_t t;
+    ringtone_init_seq(&t, ringtone_answered, ringtone_n_answered);
+    size_t k;
+    while ((k = ringtone_render(&t, play_pcm, 512, RING_AMP)) > 0) spk_write(play_pcm, k);
+    spk_end();
+    ESP_LOGI(TAG, "answered sound played");
 }
 
 // ---- record ----
@@ -318,6 +343,17 @@ static void on_clip(const uint8_t addr[6], uint8_t origin, uint8_t id, uint8_t d
     if (q) xQueueSend(q, &e, 0);
 }
 
+// A callee answered this board's call (mesh task): "Answered" in its colour
+static void on_answer(uint8_t origin, uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!call_until) return;                         // no call out (cancelled, or over)
+    ESP_LOGI(TAG, "call answered by %02x", origin);
+    st.ans_r = r, st.ans_g = g, st.ans_b = b;
+    call_until = 0;
+    answered_until = esp_timer_get_time() + ANSWERED_MS * 1000LL;
+    post(EV_ANSWERED);
+}
+
 static void on_ring(uint8_t origin, uint8_t r, uint8_t g, uint8_t b)
 {
     ev_t e = { .kind = EV_RING_IN, .origin = origin, .rgb = { r, g, b } };
@@ -359,14 +395,17 @@ static void handle(const ev_t *e)
     }
     case EV_RING_IN:
         if (st.phase == CLIP_REC) break;             // busy talking: no ring
-        ring(e->rgb);
+        ring(e->rgb, e->origin);
         break;
     case EV_RING_LOCAL: {
         const app_cfg_t *c = config_get();
         uint8_t own[3] = { c->r, c->g, c->b };
-        ring(own);
+        ring(own, CALLER_NONE);
         break;
     }
+    case EV_ANSWERED:
+        play_answered();
+        break;
     case EV_RX_START:
         rx_start(e);
         break;
@@ -450,7 +489,10 @@ static void cmd_clip(int argc, char **argv)
 static void cmd_ring(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "local")) clip_ring_local();
-    else if (argc > 1 && !strcmp(argv[1], "stop")) clip_ring_stop();
+    else if (argc > 1 && !strcmp(argv[1], "stop")) clip_ring_stop(false);
+    else if (argc > 1 && !strcmp(argv[1], "answer")) clip_ring_stop(true);
+    else if (argc > 1 && !strcmp(argv[1], "cancel")) clip_call_cancel();
+    else if (argc > 1 && !strcmp(argv[1], "answered")) post(EV_ANSWERED);
     else clip_ring();
     ESP_LOGI("test", "ok ring%s%s", argc > 1 ? " " : "", argc > 1 ? argv[1] : "");
 }
@@ -469,10 +511,10 @@ void clip_start(void)
     if (board_audio_init(true)) mic_ok = board_mic_open(MIC_GAIN_DB);   // speaker first (board_audio.h)
     bool sp = spk_open();
     ESP_LOGI(TAG, "microphones %s, speaker %s", mic_ok ? "ready" : "NOT found", sp ? "ready" : "NOT found");
-    mesh_set_voice_hooks(on_clip, on_ring);
+    mesh_set_voice_hooks(on_clip, on_ring, on_answer);
     xTaskCreatePinnedToCore(clip_task, "clip", 4096, NULL, 4, NULL, 0);
     testcon_register("clip", "clip rec <ms>|send|play|info", cmd_clip);
-    testcon_register("ring", "ring [local|stop]", cmd_ring);
+    testcon_register("ring", "ring [local|stop|answer|cancel|answered]", cmd_ring);
 }
 
 void clip_rec_begin(void)
@@ -507,10 +549,35 @@ bool clip_play_last(void)
     return true;
 }
 
-void clip_ring(void) { mesh_start_ring(); }
+void clip_ring(void)
+{
+    answered_until = 0;
+    call_until = esp_timer_get_time() + CALL_OUT_MS * 1000LL;
+    mesh_start_ring();
+}
+
+void clip_call_cancel(void)
+{
+    if (call_until || answered_until) ESP_LOGI(TAG, "call screen closed");
+    call_until = answered_until = 0;
+}
 
 void clip_ring_local(void) { post(EV_RING_LOCAL); }
 
-void clip_ring_stop(void) { ring_stop = true; }
+void clip_ring_stop(bool answer)
+{
+    ring_answer = answer;
+    ring_stop = true;
+}
 
-void clip_get_state(clip_state_t *out) { *out = st; }
+void clip_get_state(clip_state_t *out)
+{
+    *out = st;
+    int64_t now = esp_timer_get_time();
+    if (call_until && now > call_until) {
+        ESP_LOGI(TAG, "call not answered");
+        call_until = 0;
+    }
+    if (answered_until && now > answered_until) answered_until = 0;
+    out->call = answered_until ? CLIP_CALL_ANSWERED : call_until ? CLIP_CALL_OUT : CLIP_CALL_NONE;
+}

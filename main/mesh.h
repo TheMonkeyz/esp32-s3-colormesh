@@ -93,11 +93,13 @@ void mesh_set_gap_hook(mesh_gap_hook_t hook);
 void mesh_set_clip(uint8_t id, uint8_t ds, bool on);
 // A call: effect MP_EFFECT_RING with a bumped effect seq for MESH_EFFECT_MS, like a wave ("mesh: ring from self")
 void mesh_start_ring(void);
+// The answer to a call from caller (origin): effect MP_EFFECT_ANSWER, byte 28 = caller, for MESH_EFFECT_MS
+void mesh_answer(uint8_t caller);
 // Called from the mesh task: a peer advertises MP_F_CLIP with a clip id not handed over yet for its address; a peer's
-// new call (with its colour). Copy and return.
+// new call (with its colour); a peer's answer to this board's call (with its colour). Copy and return.
 typedef void (*mesh_clip_cb_t)(const uint8_t addr[6], uint8_t origin, uint8_t id, uint8_t ds);
 typedef void (*mesh_ring_cb_t)(uint8_t origin, uint8_t r, uint8_t g, uint8_t b);
-void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring);
+void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring, mesh_ring_cb_t answer);
 // The clip's periodic set on instance 1 (clip.c): start with the periodic interval in 1.25 ms units, change the
 // periodic data (any length up to 247), stop. Synchronous, under the radio lock. 0 = ok, else a NimBLE rc.
 int mesh_clip_adv_start(uint16_t per_itvl);

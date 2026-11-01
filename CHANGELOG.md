@@ -5,6 +5,12 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.5 - 2026-11-01
+- Calls: the ring now starts on its first note (the speaker wakes up on a short silence first).
+- Calls: the ringing board says "Touch the screen to answer"; a touch answers. The caller shows "Calling…" in its
+  colour, then "Answered" in the colour of the board that answered, with a short rising doo-di-dit.
+- Console: `ring answer`, `ring cancel`, `ring answered` (plays the answered sound here).
+
 ## v0.6.0-rc.3 - 2026-11-01
 - Voice clips: swipe to the last page ("Voice"), hold the screen and talk (up to 5 s), let go. Every board in range
   gets the clip at the same time and plays it at once, with "Message" in your colour.
