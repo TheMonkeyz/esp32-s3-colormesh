@@ -16,4 +16,10 @@
     <string name="need_permission">ColorMesh needs the Bluetooth permission to hear and reach the boards.</string>
     <string name="bt_off">Turn on Bluetooth to join the boards.</string>
     <string name="radio_error">Bluetooth error (%s)</string>
+    <string name="talk">Hold to talk</string>
+    <string name="talking">Recording…</string>
+    <string name="sending">Sending…</string>
+    <string name="no_clips">This phone cannot send voice clips (no Bluetooth periodic advertising).</string>
+    <string name="no_mic">No microphone</string>
+    <string name="clip_failed">The voice clip did not go out.</string>
 </resources>

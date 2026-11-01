@@ -50,6 +50,7 @@ typedef enum { EV_REC_END, EV_REC_DROP, EV_SEND, EV_PLAY_LAST, EV_RING_IN, EV_RI
 typedef struct {
     ev_kind_t kind;
     uint8_t addr[6], origin, id, rgb[3];
+    uint8_t addr_type, sid;                 // EV_RX_START: the train's address type and SID (a board: public, 1)
 } ev_t;
 
 static QueueHandle_t q;
@@ -256,6 +257,27 @@ static void send_clip(void)
 
 // ---- receive (sync_cb runs in the NimBLE host task) ----
 
+static clip_frag_t frag;                     // host task: a periodic packet in fragments (the Android app's are long)
+
+// One whole periodic packet: every clip chunk AD in it (a board sends one, the Android app several)
+static void rx_packet(const uint8_t *data, size_t n)
+{
+    size_t off = 0, len;
+    const uint8_t *ad;
+    bool done = false, failed = false;
+    xSemaphoreTake(rx_lock, portMAX_DELAY);
+    while (!done && clip_next_ad(data, n, &off, &ad, &len)) {
+        clip_pkt_t p;
+        if (!clip_parse(ad, len, &p)) continue;
+        done = clip_rx_add(&rx, &p);
+        failed = !done && !rx.active;               // every chunk in but the CRC did not match
+        if (failed) break;
+    }
+    xSemaphoreGive(rx_lock);
+    if (done) post(EV_RX_DONE);
+    else if (failed) post(EV_RX_LOST);
+}
+
 static int sync_cb(struct ble_gap_event *e, void *arg)
 {
     switch (e->type) {
@@ -267,15 +289,9 @@ static int sync_cb(struct ble_gap_event *e, void *arg)
         if (e->periodic_sync.status) post(EV_RX_LOST);
         break;
     case BLE_GAP_EVENT_PERIODIC_REPORT: {
-        if (e->periodic_report.data_status != BLE_HCI_PERIODIC_DATA_STATUS_COMPLETE) break;
-        clip_pkt_t p;
-        if (!clip_parse(e->periodic_report.data, e->periodic_report.data_length, &p)) break;
-        xSemaphoreTake(rx_lock, portMAX_DELAY);
-        bool done = clip_rx_add(&rx, &p);
-        bool failed = !done && !rx.active;           // every chunk in but the CRC did not match
-        xSemaphoreGive(rx_lock);
-        if (done) post(EV_RX_DONE);
-        else if (failed) post(EV_RX_LOST);
+        int n = clip_frag_add(&frag, e->periodic_report.data, e->periodic_report.data_length,
+                              e->periodic_report.data_status);
+        if (n > 0) rx_packet(frag.buf, (size_t)n);
         break;
     }
     case BLE_GAP_EVENT_PERIODIC_SYNC_LOST:
@@ -313,10 +329,11 @@ static void rx_start(const ev_t *e)
     clip_rx_begin(&rx, e->origin, e->id, rx_buf);
     rx_pending = true;
     xSemaphoreGive(rx_lock);
-    ble_addr_t a = { .type = BLE_ADDR_PUBLIC };
+    ble_addr_t a = { .type = e->addr_type };
     memcpy(a.val, e->addr, 6);
+    clip_frag_reset(&frag);
     struct ble_gap_periodic_sync_params p = { .skip = 0, .sync_timeout = SYNC_TIMEOUT };
-    int rc = ble_gap_periodic_adv_sync_create(&a, MESH_ADV_CLIP, &p, sync_cb, NULL);
+    int rc = ble_gap_periodic_adv_sync_create(&a, e->sid, &p, sync_cb, NULL);
     if (rc) {
         ESP_LOGW(TAG, "sync create rc=%d", rc);
         xSemaphoreTake(rx_lock, portMAX_DELAY);
@@ -334,12 +351,25 @@ static void rx_start(const ev_t *e)
 
 static void on_clip(const uint8_t addr[6], uint8_t origin, uint8_t id, uint8_t ds)
 {
-    ev_t e = { .kind = EV_RX_START, .origin = origin, .id = id };
+    ev_t e = { .kind = EV_RX_START, .origin = origin, .id = id, .addr_type = BLE_ADDR_PUBLIC, .sid = MESH_ADV_CLIP };
     memcpy(e.addr, addr, 6);
     mesh_peer_t peers[MP_MAX_PEERS];
     int n = mesh_peers(peers, MP_MAX_PEERS);
     for (int i = 0; i < n; i++)
         if (!memcmp(peers[i].addr, addr, 6)) e.rgb[0] = peers[i].r, e.rgb[1] = peers[i].g, e.rgb[2] = peers[i].b;
+    if (q) xQueueSend(q, &e, 0);
+}
+
+// The Android app's clip: its train is on the set that carries the beacon (its address type and SID); the colour is
+// the phone's, found by origin (its flood advert has another address)
+static void on_beacon(const uint8_t addr[6], uint8_t addr_type, uint8_t sid, uint8_t origin, uint8_t id, uint8_t ds)
+{
+    ev_t e = { .kind = EV_RX_START, .origin = origin, .id = id, .addr_type = addr_type, .sid = sid };
+    memcpy(e.addr, addr, 6);
+    mesh_peer_t peers[MP_MAX_PEERS];
+    int n = mesh_peers(peers, MP_MAX_PEERS);
+    for (int i = 0; i < n; i++)
+        if (peers[i].origin == origin) e.rgb[0] = peers[i].r, e.rgb[1] = peers[i].g, e.rgb[2] = peers[i].b;
     if (q) xQueueSend(q, &e, 0);
 }
 
@@ -515,6 +545,7 @@ void clip_start(void)
     bool sp = spk_open();
     ESP_LOGI(TAG, "microphones %s, speaker %s", mic_ok ? "ready" : "NOT found", sp ? "ready" : "NOT found");
     mesh_set_voice_hooks(on_clip, on_ring, on_answer);
+    mesh_set_beacon_hook(on_beacon);
     xTaskCreatePinnedToCore(clip_task, "clip", 4096, NULL, 4, NULL, 0);
     testcon_register("clip", "clip rec <ms>|send|play|info", cmd_clip);
     testcon_register("ring", "ring [local|stop|answer|cancel|answered]", cmd_ring);

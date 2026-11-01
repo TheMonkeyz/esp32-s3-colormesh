@@ -4,6 +4,7 @@
 
 #define PROTO 0x43
 #define KIND  'V'
+#define BEACON 'B'
 
 uint32_t clip_crc32(const uint8_t *p, size_t n)
 {
@@ -46,7 +47,7 @@ int clip_pack(uint8_t origin, uint8_t id, const uint8_t *clip, uint32_t len, uin
 
 bool clip_parse(const uint8_t *p, size_t n, clip_pkt_t *out)
 {
-    if (n < CLIP_PKT_HDR + 1 || p[0] + 1u != n || p[1] != 0xFF || p[2] != 0xFF || p[3] != 0xFF || p[4] != PROTO ||
+    if (n < CLIP_PKT_HDR + 1 || p[0] + 1u != n || p[1] != 0xFF || p[3] != 0xFF || p[4] != PROTO ||   // company 0xFFxx
         p[5] != KIND)
         return false;
     clip_pkt_t c = { .origin = p[6], .id = p[7], .chunk = get16(p + 8), .total = get16(p + 10), .len = get32(p + 12),
@@ -57,6 +58,50 @@ bool clip_parse(const uint8_t *p, size_t n, clip_pkt_t *out)
     if (c.data_len != want) return false;
     *out = c;
     return true;
+}
+
+void clip_frag_reset(clip_frag_t *f)
+{
+    f->len = 0;
+    f->bad = false;
+}
+
+int clip_frag_add(clip_frag_t *f, const uint8_t *data, size_t n, int status)
+{
+    if (!f->bad && f->len + n <= CLIP_FRAG_MAX) {
+        memcpy(f->buf + f->len, data, n);
+        f->len = (uint16_t)(f->len + n);
+    } else {
+        f->bad = true;
+    }
+    if (status == 1) return 0;                       // more to come
+    int whole = status == 0 && !f->bad ? f->len : 0;
+    clip_frag_reset(f);                              // the next report starts a new packet
+    return whole;
+}
+
+bool clip_next_ad(const uint8_t *p, size_t n, size_t *off, const uint8_t **ad, size_t *ad_len)
+{
+    if (*off >= n || p[*off] == 0 || *off + 1 + p[*off] > n) return false;
+    *ad = p + *off;
+    *ad_len = (size_t)p[*off] + 1;
+    *off += *ad_len;
+    return true;
+}
+
+bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds)
+{
+    size_t off = 0, len;
+    const uint8_t *a;
+    while (clip_next_ad(p, n, &off, &a, &len)) {
+        if (len == 9 && a[1] == 0xFF && a[2] == 0xFF && a[3] == 0xFF && a[4] == PROTO && a[5] == BEACON) {
+            *origin = a[6];
+            *id = a[7];
+            *ds = a[8];
+            return true;
+        }
+    }
+    return false;
 }
 
 void clip_rx_begin(clip_rx_t *r, uint8_t origin, uint8_t id, uint8_t *buf)

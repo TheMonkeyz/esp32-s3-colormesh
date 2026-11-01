@@ -6,6 +6,9 @@
 // A voice clip cut into chunks for the periodic train (clip.c). Each periodic packet is one manufacturer-data AD:
 //   [len] [0xFF] [0xFF 0xFF]  proto 0x43 · 'V' · origin · clip id · chunk u16 · total u16 · clip len u32 · crc32 u32
 //   then up to CLIP_CHUNK_DATA bytes of the ADPCM stream (little-endian numbers).
+// The Android app (android/, Clip.kt) sends the same ADs, but Android holds one manufacturer AD per company id, so
+// the k-th chunk of one periodic packet carries company id 0xFFFF - k: any 0xFFxx company id is a clip chunk. Its
+// packets hold several ADs and come in several HCI fragments (clip_frag_*, clip_next_ad).
 // The receiver keeps a bitmap of the chunks it has; the clip is whole when every bit is set and the CRC-32 of the
 // assembled bytes matches. Pure C99, host-tested (tests/host/test_clip_chunks.c).
 #define CLIP_PKT_HDR     20                 // the AD header (4) and the clip header (16)
@@ -29,6 +32,24 @@ int clip_pack(uint8_t origin, uint8_t id, const uint8_t *clip, uint32_t len, uin
               uint8_t *out);
 // A received periodic report: true if it is a well-formed clip packet (the header checked against itself)
 bool clip_parse(const uint8_t *p, size_t n, clip_pkt_t *out);
+
+// One periodic packet put back together from its HCI fragments (data status 0 = complete, 1 = more to come,
+// 2 = truncated). clip_frag_add returns the packet's length once it is complete (in f->buf), else 0; a truncated
+// packet or one longer than CLIP_FRAG_MAX is dropped. Not reentrant (one sync callback).
+#define CLIP_FRAG_MAX 2048
+typedef struct {
+    uint8_t buf[CLIP_FRAG_MAX];
+    uint16_t len;
+    bool bad;                               // this packet overflowed: drop the rest of it
+} clip_frag_t;
+void clip_frag_reset(clip_frag_t *f);
+int clip_frag_add(clip_frag_t *f, const uint8_t *data, size_t n, int status);
+// The AD at *off in p (n bytes): *ad and *ad_len (its length byte included), and *off moves past it. False at the
+// end, on a zero length, or on an AD that runs past n.
+bool clip_next_ad(const uint8_t *p, size_t n, size_t *off, const uint8_t **ad, size_t *ad_len);
+// The Android app's clip beacon, in its clip set's extended advertising data (Android gives that set its own address
+// and SID, so a board cannot find it from the phone's flood advert): [8] [0xFF] [0xFF 0xFF] 0x43 'B' origin id tenths
+bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds);
 
 // Receiver side: one clip being assembled. buf holds CLIP_MAX_BYTES, bits CLIP_MAX_CHUNKS bits.
 typedef struct {

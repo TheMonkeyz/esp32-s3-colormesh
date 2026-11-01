@@ -9,7 +9,9 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -17,6 +19,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
@@ -46,6 +49,13 @@ class MainActivity : Activity() {
     private lateinit var near: TextView
     private lateinit var status: TextView
     private lateinit var callBtn: Button
+    private lateinit var talkBtn: Button
+    private var rec: AudioRecord? = null
+    private var recThread: Thread? = null
+    @Volatile private var recPcm = ShortArray(0)
+    @Volatile private var recN = 0
+    private var recStart = 0L
+    private var clipId = Random.nextInt(256)
     private val swatchViews = ArrayList<View>()
     private var radio: Radio? = null
     private val ui = Handler(Looper.getMainLooper())
@@ -115,9 +125,28 @@ class MainActivity : Activity() {
             background = GradientDrawable().apply { cornerRadius = 28 * dp; setColor(0xFF2BB24C.toInt()) }
             setOnClickListener { mesh.ring(now()); push() }
         }
-        root.addView(callBtn, LinearLayout.LayoutParams((220 * dp).toInt(), (56 * dp).toInt()).apply {
-            gravity = Gravity.CENTER_HORIZONTAL; topMargin = (12 * dp).toInt()
-        })
+        // Hold to talk, as the board's voice page: up to 5 s, sent when the finger lifts
+        talkBtn = Button(this).apply {
+            text = getString(R.string.talk)
+            setTextColor(0xFFF2F4F7.toInt())
+            textSize = 18f
+            isAllCaps = false
+            background = GradientDrawable().apply { cornerRadius = 28 * dp; setColor(0xFF2A3340.toInt()) }
+            setOnTouchListener { v, e ->
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { v.isPressed = true; talkDown() }
+                    MotionEvent.ACTION_UP -> { v.isPressed = false; talkUp(true) }
+                    MotionEvent.ACTION_CANCEL -> { v.isPressed = false; talkUp(false) }
+                }
+                true
+            }
+        }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        val half = LinearLayout.LayoutParams(0, (56 * dp).toInt(), 1f).apply { setMargins(pad, 0, pad, 0) }
+        row.addView(callBtn, half)
+        row.addView(talkBtn, LinearLayout.LayoutParams(half))
+        root.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (12 * dp).toInt() })
         status = TextView(this).apply {
             setTextColor(0xFF8B95A1.toInt())
             textSize = 12f
@@ -173,6 +202,7 @@ class MainActivity : Activity() {
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
+        if (code == 2) return                           // the microphone: the next press records
         if (results.isNotEmpty() && results.all { it == PackageManager.PERMISSION_GRANTED }) startRadio()
         else status.text = getString(R.string.need_permission)
     }
@@ -200,6 +230,7 @@ class MainActivity : Activity() {
         ui.removeCallbacks(frame)
         mesh.setHolding(false)
         radio?.update(mesh.advertValue())
+        talkUp(false)
         radio?.stop()
         radio = null
         stopRingSound()
@@ -230,6 +261,7 @@ class MainActivity : Activity() {
             val t = now()
             mesh.tick(t)
             push()
+            radio?.clipTick()
             val n = mesh.table.peers.size
             near.text = resources.getQuantityString(R.plurals.near, n, n)
             if (mesh.ringing != shownRing) {
@@ -242,6 +274,63 @@ class MainActivity : Activity() {
             }
             view.invalidate()
             ui.postDelayed(this, FRAME_MS)
+        }
+    }
+
+    // ---- voice clips ----
+
+    private fun talkDown() {
+        val r = radio ?: return
+        if (!r.canSendClips) { status.text = getString(R.string.no_clips); return }
+        if (r.sendingClip || rec != null) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 2)
+            return
+        }
+        val max = Clip.RATE * Clip.MAX_MS / 1000
+        val buf = maxOf(AudioRecord.getMinBufferSize(Clip.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT), 4096)
+        val a = try {
+            AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, Clip.RATE, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, buf)
+        } catch (e: SecurityException) { return }
+        if (a.state != AudioRecord.STATE_INITIALIZED) { a.release(); status.text = getString(R.string.no_mic); return }
+        recPcm = ShortArray(max)
+        recN = 0
+        rec = a
+        recStart = now()
+        a.startRecording()
+        talkBtn.text = getString(R.string.talking)
+        recThread = Thread {
+            val tmp = ShortArray(512)
+            while (rec === a && recN < max) {
+                val n = a.read(tmp, 0, minOf(tmp.size, max - recN))
+                if (n <= 0) break
+                System.arraycopy(tmp, 0, recPcm, recN, n)
+                recN += n
+            }
+        }.also { it.start() }
+    }
+
+    private fun talkUp(send: Boolean) {
+        val a = rec ?: return
+        rec = null
+        try { a.stop() } catch (e: Exception) { }
+        recThread?.join(500)
+        a.release()
+        talkBtn.text = getString(R.string.talk)
+        val n = recN and 1.inv()
+        if (!send || n * 1000L / Clip.RATE < Clip.MIN_MS) return
+        val r = radio ?: return
+        val pcm = Clip.normalise(recPcm.copyOf(n))
+        val clip = Clip.adpcmEncode(pcm)
+        clipId = (clipId + 1) and 0xFF
+        val ds = ((n * 10L + Clip.RATE / 2) / Clip.RATE).toInt()
+        val pkts = Clip.packets(mesh.origin, clipId, clip, r.maxClipData)
+        Log.i(TAG, "clip $clipId: ${n * 1000L / Clip.RATE} ms, ${clip.size} bytes, ${pkts.size} packets of up to ${pkts[0].size} chunks")
+        talkBtn.text = getString(R.string.sending)
+        r.sendClip(mesh.origin, clipId, ds, pkts) { ok ->
+            talkBtn.text = getString(R.string.talk)
+            if (!ok) status.text = getString(R.string.clip_failed)
         }
     }
 

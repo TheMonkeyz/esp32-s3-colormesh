@@ -16,4 +16,10 @@
     <string name="need_permission">ColorMesh a besoin de l\'autorisation Bluetooth pour entendre et joindre les cartes.</string>
     <string name="bt_off">Activer le Bluetooth pour rejoindre les cartes.</string>
     <string name="radio_error">Erreur Bluetooth (%s)</string>
+    <string name="talk">Maintenir pour parler</string>
+    <string name="talking">Enregistrement…</string>
+    <string name="sending">Envoi…</string>
+    <string name="no_clips">Ce téléphone ne peut pas envoyer de messages vocaux (pas d’annonces Bluetooth périodiques).</string>
+    <string name="no_mic">Aucun microphone</string>
+    <string name="clip_failed">Le message vocal n’est pas parti.</string>
 </resources>

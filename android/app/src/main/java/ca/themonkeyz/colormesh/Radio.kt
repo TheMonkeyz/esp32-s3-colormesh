@@ -1,11 +1,13 @@
 package ca.themonkeyz.colormesh
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertisingSet
 import android.bluetooth.le.AdvertisingSetCallback
 import android.bluetooth.le.AdvertisingSetParameters
+import android.bluetooth.le.PeriodicAdvertisingParameters
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -100,6 +102,91 @@ class Radio(
         onState(true, "")
     }
 
+    // ---- a voice clip: a second set, extended (not legacy) with the clip beacon, and a periodic train of packets
+    // (Clip.packets), one every 100 ms (Android's shortest periodic interval). onDone(ok) when the last went out. ----
+    private var clipSet: AdvertisingSet? = null
+    private var clipPkts: List<List<ByteArray>> = emptyList()
+    private var clipNext = 0
+    private var clipDone: ((Boolean) -> Unit)? = null
+    private var clipBusy = false
+    var clipProgress = 0f
+        private set
+
+    // The longest periodic data this phone sends (several clip ADs per packet)
+    val maxClipData: Int get() = (adapter?.leMaximumAdvertisingDataLength ?: 251).coerceAtMost(Clip.MAX_PER_PKT * Clip.PKT_MAX)
+    val canSendClips: Boolean get() = adapter?.isLePeriodicAdvertisingSupported == true &&
+        adapter.isLeExtendedAdvertisingSupported
+
+    private fun pktData(ads: List<ByteArray>): AdvertiseData {
+        val b = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
+        ads.forEachIndexed { k, ad -> b.addManufacturerData(Clip.companyOf(k), ad.copyOfRange(4, ad.size)) }
+        return b.build()
+    }
+
+    private val clipCb = object : AdvertisingSetCallback() {
+        override fun onAdvertisingSetStarted(s: AdvertisingSet?, txPower: Int, status: Int) {
+            if (status != ADVERTISE_SUCCESS) {
+                Log.w(TAG, "clip set failed status=$status")
+                clipEnd(false)
+                return
+            }
+            clipSet = s
+            clipNext = 1
+            Log.i(TAG, "clip set up: ${clipPkts.size} packets")
+        }
+        override fun onPeriodicAdvertisingDataSet(s: AdvertisingSet?, status: Int) {
+            clipBusy = false
+            if (status != ADVERTISE_SUCCESS) Log.w(TAG, "periodic data status=$status")
+        }
+        override fun onAdvertisingSetStopped(s: AdvertisingSet?) { clipSet = null }
+    }
+
+    fun sendClip(origin: Int, id: Int, ds: Int, pkts: List<List<ByteArray>>, onDone: (Boolean) -> Unit) {
+        val adv = adapter?.bluetoothLeAdvertiser ?: return onDone(false)
+        if (clipDone != null || pkts.isEmpty()) return onDone(false)
+        clipPkts = pkts
+        clipNext = 0
+        clipDone = onDone
+        clipBusy = false
+        clipProgress = 0f
+        val params = AdvertisingSetParameters.Builder()
+            .setLegacyMode(false)
+            .setConnectable(false)
+            .setScannable(false)
+            .setInterval(AdvertisingSetParameters.INTERVAL_LOW)
+            .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_HIGH)
+            .setPrimaryPhy(BluetoothDevice.PHY_LE_1M)
+            .setSecondaryPhy(BluetoothDevice.PHY_LE_2M)
+            .build()
+        val beacon = Clip.beacon(origin, id, ds)
+        val advData = AdvertiseData.Builder().addManufacturerData(MeshProto.COMPANY, beacon.copyOfRange(4, beacon.size))
+            .setIncludeDeviceName(false).setIncludeTxPowerLevel(false).build()
+        val per = PeriodicAdvertisingParameters.Builder().setInterval(80).setIncludeTxPower(false).build()   // 100 ms
+        adv.startAdvertisingSet(params, advData, null, per, pktData(pkts[0]), clipCb)
+    }
+
+    // Called every 100 ms by the activity while a clip goes out: the next packet
+    fun clipTick() {
+        val s = clipSet ?: return
+        if (clipBusy) return
+        if (clipNext >= clipPkts.size) { clipEnd(true); return }
+        clipBusy = true
+        s.setPeriodicAdvertisingData(pktData(clipPkts[clipNext]))
+        clipNext++
+        clipProgress = clipNext.toFloat() / clipPkts.size
+    }
+
+    private fun clipEnd(ok: Boolean) {
+        try { adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(clipCb) } catch (e: Exception) { }
+        clipSet = null
+        val cb = clipDone
+        clipDone = null
+        Log.i(TAG, "clip sent ok=$ok packets=$clipNext/${clipPkts.size}")
+        cb?.invoke(ok)
+    }
+
+    val sendingClip get() = clipDone != null
+
     // New advert data (a change of colour, hold, effect...)
     fun update(value: ByteArray) {
         pending = value
@@ -111,6 +198,7 @@ class Radio(
     fun stop() {
         if (!running) return
         running = false
+        if (clipDone != null) clipEnd(false)
         try {
             adapter?.bluetoothLeScanner?.stopScan(scanCb)
             adapter?.bluetoothLeAdvertiser?.stopAdvertisingSet(advCb)

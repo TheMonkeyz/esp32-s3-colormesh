@@ -238,6 +238,76 @@ static void test_calls(void)
     CHECK(call_phase(&c, 15000) == CALL_NONE && c.active, "no answers yet expired: listening, nothing shown");
 }
 
+// Clips from the Android app (android/.../Clip.kt): Android sends one manufacturer AD per company id, so the phone
+// puts several chunks in one periodic packet with company ids 0xFFFF, 0xFFFE...; the packet can come in several
+// HCI fragments (data status 1 = more to come, 2 = truncated); the phone's clip set is found by its beacon AD.
+static void test_phone_clip(void)
+{
+    enum { LEN = 1000 };
+    uint8_t clip[LEN], one[CLIP_PKT_MAX];
+    for (int i = 0; i < LEN; i++) clip[i] = (uint8_t)(i * 13);
+    uint32_t crc = clip_crc32(clip, LEN);
+    // three chunks in one packet, company ids 0xFFFF, 0xFFFE, 0xFFFD
+    static uint8_t pkt[3 * CLIP_PKT_MAX];
+    size_t n = 0;
+    for (int c = 0; c < 3; c++) {
+        int k = clip_pack(0x3e, 9, clip, LEN, crc, (uint16_t)c, one);
+        one[2] = (uint8_t)(0xFF - c);
+        memcpy(pkt + n, one, (size_t)k);
+        n += (size_t)k;
+    }
+    clip_pkt_t p;
+    memcpy(one, pkt, CLIP_PKT_MAX);
+    one[2] = 0xFE;
+    CHECK(clip_parse(one, CLIP_PKT_MAX, &p) && p.chunk == 0, "company 0xFFFE is a clip chunk too");
+    one[2] = 0xFF;
+    one[3] = 0xFE;
+    CHECK(!clip_parse(one, CLIP_PKT_MAX, &p), "company 0xFEFF is not");
+
+    // the packet in fragments of 247, 247, then the rest
+    static clip_frag_t f;
+    clip_frag_reset(&f);
+    CHECK(clip_frag_add(&f, pkt, 247, 1) == 0, "first fragment: more to come");
+    CHECK(clip_frag_add(&f, pkt + 247, 247, 1) == 0, "second fragment");
+    CHECK(clip_frag_add(&f, pkt + 494, n - 494, 0) == (int)n, "complete: the whole packet");
+    CHECK(!memcmp(f.buf, pkt, n), "the bytes in order");
+    size_t off = 0, ad_len;
+    const uint8_t *ad;
+    int chunks = 0;
+    while (clip_next_ad(f.buf, n, &off, &ad, &ad_len)) {
+        CHECK(clip_parse(ad, ad_len, &p) && p.chunk == chunks && p.origin == 0x3e && p.id == 9, "AD %d", chunks);
+        chunks++;
+    }
+    CHECK(chunks == 3 && off == n, "three chunks, the whole packet read");
+    // a one-fragment packet (a board's own train) still works after a split one
+    clip_frag_reset(&f);
+    CHECK(clip_frag_add(&f, pkt, CLIP_PKT_MAX, 0) == CLIP_PKT_MAX, "a packet in one fragment");
+    // truncated: dropped, and the next packet starts clean
+    CHECK(clip_frag_add(&f, pkt, 247, 1) == 0 && clip_frag_add(&f, pkt + 247, 100, 2) == 0, "truncated: dropped");
+    CHECK(clip_frag_add(&f, pkt, CLIP_PKT_MAX, 0) == CLIP_PKT_MAX, "the next packet is whole");
+    // too long for the buffer: dropped
+    static uint8_t big[CLIP_FRAG_MAX];
+    memset(big, 0, sizeof(big));
+    CHECK(clip_frag_add(&f, big, sizeof(big), 1) == 0 && clip_frag_add(&f, big, 10, 0) == 0, "too long: dropped");
+    CHECK(clip_frag_add(&f, pkt, CLIP_PKT_MAX, 0) == CLIP_PKT_MAX, "and the next one is whole again");
+    // a malformed AD list stops the walk
+    uint8_t bad[4] = { 9, 0xFF, 0xFF, 0xFF };
+    off = 0;
+    CHECK(!clip_next_ad(bad, sizeof(bad), &off, &ad, &ad_len), "an AD longer than the packet");
+    uint8_t zero[2] = { 0, 0 };
+    off = 0;
+    CHECK(!clip_next_ad(zero, sizeof(zero), &off, &ad, &ad_len), "a zero length ends the list");
+
+    // the beacon, alone or after another AD
+    uint8_t beacon[12] = { 2, 0x01, 0x06, 8, 0xFF, 0xFF, 0xFF, 0x43, 'B', 0x3e, 9, 31 };
+    uint8_t o = 0, id = 0, ds = 0;
+    CHECK(clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds) && o == 0x3e && id == 9 && ds == 31, "beacon");
+    CHECK(clip_beacon_parse(beacon + 3, 9, &o, &id, &ds), "beacon alone");
+    beacon[8] = 'V';
+    CHECK(!clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds), "not a beacon");
+    CHECK(!clip_beacon_parse(pkt, n, &o, &id, &ds), "clip chunks are not a beacon");
+}
+
 int main(void)
 {
     test_adpcm();
@@ -247,5 +317,6 @@ int main(void)
     test_ringtone();
     test_answered();
     test_calls();
+    test_phone_clip();
     return check_done("voice");
 }
