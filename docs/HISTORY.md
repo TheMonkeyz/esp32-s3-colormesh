@@ -104,3 +104,12 @@ the pager's first page (swipe right from main; rc.6), a swipe no longer sends a 
 forge_lvgl copy; rc.7). rc.7 flashed on A by USB; B and C pulled it over Bluetooth 3 s after A's boot, 21 s each at
 52 KB/s, 0 resent. Harness 15/15.
 
+## 2026-11-01: waves, v0.2.0-rc.1
+
+Bicolour waves from mockups (centre rings; bands from left, right, top, bottom; colour B = opposite hue; per-pixel
+merge; a hold adds). Two agents: the pure-C renderer with 82 host checks (6 instructions per pixel for centre waves)
+and the board side (tap zones, effect bytes 17-18 in the advert, 33 ms raw-frame loop: 29 fps with one wave, 21 fps
+with five). First peer test: A received waves from both peers but sat on the ring page after its restart, so it drew
+nothing; boot now goes to main when a colour is saved. v0.2.0-rc.1 flashed on A, pulled by B and C in 21 s each; the
+user confirmed waves show and merge on every board.
+
