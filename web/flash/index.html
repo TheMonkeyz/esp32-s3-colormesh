@@ -56,6 +56,8 @@
   .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
   .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; }
   .swatch[aria-pressed="true"] { border-color: var(--fg); }
+  .swatch:disabled, .row input[type="color"]:disabled { cursor: not-allowed; }
+  .row.off .swatches, .row.off input[type="color"] { opacity: .45; }
   .switch { width: 20px; height: 20px; }
   .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--line);
          vertical-align: middle; margin-right: 6px; }
@@ -77,9 +79,10 @@
     <h2 style="margin:0 0 8px;font-size:1.1rem">How a board works</h2>
     <dl class="kv" style="margin:0">
       <dt>Hold the screen</dt><dd>every board nearby shows your colour; several holders mix.</dd>
-      <dt>Tap the screen</dt><dd>a wave of your colour and its opposite on every board: the centre makes rings, an edge
-        makes bands moving in from that side. Waves from several boards merge.</dd>
-      <dt>Swipe right</dt><dd>the colour ring: tap a colour to change yours.</dd>
+      <dt>Tap the screen</dt><dd>a wave of your colour and its opposite (or the wave colour you chose) on every board:
+        the centre makes rings, an edge makes bands moving in from that side. Waves from several boards merge.</dd>
+      <dt>Swipe right</dt><dd>the colour ring: tap a colour to change yours; hold one to make it your wave colour
+        (a small dot marks it; hold it again for automatic).</dd>
       <dt>Swipe left</dt><dd>the system page: version, Bluetooth address, the boards nearby.</dd>
       <dt>Dev mode (on)</dt><dd>a board that hears a newer firmware nearby pulls it over Bluetooth and restarts on it.</dd>
     </dl>
@@ -102,7 +105,8 @@
   <details class="card" id="cfg-card">
     <summary>Configure over USB</summary>
     <p class="muted" style="margin:0 0 12px">With the board plugged in (and the Install dialog closed: it holds the
-      port), connect to read and change its colour, name, dev mode and brightness. Nothing leaves your computer.</p>
+      port), connect to read and change its colour, wave colour, name, dev mode and brightness. Nothing leaves your
+      computer.</p>
     <div class="row">
       <button class="btn" id="cfg-connect" type="button">Connect</button>
       <button class="btn quiet" id="cfg-disconnect" type="button" hidden>Disconnect</button>
@@ -114,6 +118,17 @@
         <label for="cfg-color">Colour</label>
         <input type="color" id="cfg-color" value="#ff8000">
         <div class="swatches" id="cfg-swatches" role="group" aria-label="Preset colours"></div>
+      </div>
+      <div class="row" id="cfg-color2-row">
+        <label for="cfg-color2">Wave colour</label>
+        <input type="color" id="cfg-color2" value="#0080ff">
+        <div class="swatches" id="cfg-swatches2" role="group" aria-label="Preset wave colours"></div>
+      </div>
+      <div class="row" id="cfg-color2-auto-row">
+        <label></label>
+        <input type="checkbox" class="switch" id="cfg-color2-auto" checked>
+        <label for="cfg-color2-auto" style="min-width:0">Automatic (opposite)</label>
+        <span class="muted" id="cfg-color2-note">the opposite of the colour</span>
       </div>
       <div class="row">
         <label for="cfg-name">Name</label>

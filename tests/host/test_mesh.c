@@ -25,22 +25,23 @@ static bool same(const mp_state_t *a, const mp_state_t *b)
 {
     return a->origin == b->origin && a->seq == b->seq && a->ttl == b->ttl && a->flags == b->flags && a->r == b->r &&
            a->g == b->g && a->b == b->b && !memcmp(a->ver, b->ver, 4) && a->target == b->target &&
-           a->effect == b->effect && a->effect_seq == b->effect_seq;
+           a->effect == b->effect && a->effect_seq == b->effect_seq && a->b2r == b->b2r && a->b2g == b->b2g &&
+           a->b2b == b->b2b;
 }
 
 static void test_payload(void)
 {
     mp_state_t s = { 0xA7, 0xFE, 3, MP_F_HOLDING | MP_F_DEV | MP_F_SERVABLE | MP_F_PENDING, 0x12, 0x34, 0x56,
-                     { 1, 2, 3, 104 }, 0x42, MP_EFFECT_WAVE_BOTTOM, 0x9C };
+                     { 1, 2, 3, 104 }, 0x42, MP_EFFECT_WAVE_BOTTOM, 0x9C, 0x00, 0xC8, 0x3B };
     uint8_t buf[31];
     memset(buf, 0xEE, sizeof(buf));
     CHECK(mp_encode(&s, buf, sizeof(buf)) == 30, "encode length");
-    static const uint8_t want[19] = { 29, 0xFF, 0xFF, 0xFF, 0x43, 0xA7, 0xFE, 3, 0x0F, 0x12, 0x34, 0x56,
-                                      1, 2, 3, 104, 0x42, 5, 0x9C };
+    static const uint8_t want[22] = { 29, 0xFF, 0xFF, 0xFF, 0x43, 0xA7, 0xFE, 3, 0x0F, 0x12, 0x34, 0x56,
+                                      1, 2, 3, 104, 0x42, 5, 0x9C, 0x00, 0xC8, 0x3B };
     CHECK(!memcmp(buf, want, sizeof(want)), "byte map");
     bool zero = true;
-    for (int i = 19; i < 30; i++) zero = zero && buf[i] == 0;
-    CHECK(zero, "reserved bytes 19-29 are zero");
+    for (int i = 22; i < 30; i++) zero = zero && buf[i] == 0;
+    CHECK(zero, "reserved bytes 22-29 are zero");
     CHECK(buf[30] == 0xEE, "nothing written past 30 bytes");
     CHECK(mp_encode(&s, buf, 29) == -1, "a 29-byte buffer is too small");
     CHECK(mp_encode(&s, buf, 30) == 30, "a 30-byte buffer is enough");
@@ -51,11 +52,12 @@ static void test_payload(void)
     memset(&d, 0, sizeof(d));
     CHECK(mp_decode_ad(buf, 30, &d) && same(&d, &s), "round trip through the whole AD structure");
     // every field on its own, so a swapped pair would show
-    for (int f = 0; f < 14; f++) {         // origin seq ttl flags r g b ver[0..3] target effect effect_seq
+    for (int f = 0; f < 17; f++) {         // origin seq ttl flags r g b ver[0..3] target effect effect_seq b2r b2g b2b
         mp_state_t one = { 0 };
         uint8_t *p = f == 0 ? &one.origin : f == 1 ? &one.seq : f == 2 ? &one.ttl : f == 3 ? &one.flags
                    : f == 4 ? &one.r : f == 5 ? &one.g : f == 6 ? &one.b : f == 11 ? &one.target
-                   : f == 12 ? &one.effect : f == 13 ? &one.effect_seq : &one.ver[f - 7];
+                   : f == 12 ? &one.effect : f == 13 ? &one.effect_seq : f == 14 ? &one.b2r : f == 15 ? &one.b2g
+                   : f == 16 ? &one.b2b : &one.ver[f - 7];
         *p = (uint8_t)(0x80 + f);
         uint8_t ad[30];
         mp_state_t back;
@@ -74,6 +76,28 @@ static void test_payload(void)
         CHECK(ad[17] == v && ad[18] == 255 - v && mp_decode_ad(ad, 30, &back) && back.effect == v &&
               back.effect_seq == 255 - v, "effect %d round trip", v);
     }
+    // colour B at bytes 19-21, every value of each channel; automatic (0, 0, 0) stays all zero on air
+    for (int v = 0; v < 256; v++) {
+        mp_state_t one = { 0 };
+        one.b2r = (uint8_t)v;
+        one.b2g = (uint8_t)(255 - v);
+        one.b2b = (uint8_t)(v ^ 0x5A);
+        uint8_t ad[30];
+        mp_state_t back;
+        memset(&back, 0xEE, sizeof(back));
+        CHECK(mp_encode(&one, ad, sizeof(ad)) == 30, "colour B: encode length");
+        CHECK(ad[19] == v && ad[20] == 255 - v && ad[21] == (v ^ 0x5A) && mp_decode_ad(ad, 30, &back) &&
+              back.b2r == v && back.b2g == 255 - v && back.b2b == (v ^ 0x5A) && ad[17] == 0 && ad[18] == 0,
+              "colour B %d round trip", v);
+    }
+    mp_state_t autob = { 0 };
+    autob.r = 0xFF;
+    uint8_t ad0[30];
+    mp_state_t back0;
+    memset(&back0, 0xEE, sizeof(back0));
+    mp_encode(&autob, ad0, sizeof(ad0));
+    CHECK(ad0[19] == 0 && ad0[20] == 0 && ad0[21] == 0 && mp_decode_ad(ad0, 30, &back0) && back0.b2r == 0 &&
+          back0.b2g == 0 && back0.b2b == 0, "automatic colour B: 0, 0, 0 on air and back");
     CHECK(MP_EFFECT_NONE == 0 && MP_EFFECT_WAVE_CENTRE == 1 && MP_EFFECT_WAVE_LEFT == 2 && MP_EFFECT_WAVE_RIGHT == 3 &&
           MP_EFFECT_WAVE_TOP == 4 && MP_EFFECT_WAVE_BOTTOM == 5, "effect ids");
 
@@ -193,6 +217,26 @@ static void test_table(void)
     stop.seq = 18;
     stop.effect = MP_EFFECT_NONE;
     CHECK(mp_table_update(&t, A, &stop, -40, 1220), "an effect ending is a change");
+    mp_state_t b2 = stop;
+    b2.seq = 19;
+    b2.b2g = 0xFF;
+    CHECK(mp_table_update(&t, A, &b2, -40, 1240), "a chosen colour B is a change");
+    CHECK(t.peers[0].st.b2g == 0xFF && t.peers[0].st.b2r == 0 && t.peers[0].st.b2b == 0, "colour B is stored");
+    mp_state_t b2same = b2;
+    b2same.seq = 20;
+    CHECK(!mp_table_update(&t, A, &b2same, -40, 1260), "the same colour B again is no change");
+    mp_state_t b2r = b2same;
+    b2r.seq = 21;
+    b2r.b2r = 1;
+    CHECK(mp_table_update(&t, A, &b2r, -40, 1280), "colour B red channel alone is a change");
+    mp_state_t b2b = b2r;
+    b2b.seq = 22;
+    b2b.b2b = 1;
+    CHECK(mp_table_update(&t, A, &b2b, -40, 1300), "colour B blue channel alone is a change");
+    mp_state_t b2auto = b2b;
+    b2auto.seq = 23;
+    b2auto.b2r = b2auto.b2g = b2auto.b2b = 0;
+    CHECK(mp_table_update(&t, A, &b2auto, -40, 1320), "back to automatic is a change");
 
     // seq wraps: 250 -> 3 is newer
     mp_table_init(&t, 0, 0);

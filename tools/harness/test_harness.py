@@ -618,7 +618,9 @@ class AppSuites(unittest.TestCase):
         self.assertEqual((app_suites.PREV, app_suites.HOME, app_suites.NEXT), ('pick', 'main', 'system'))
         for name in app_suites.PAGES:
             self.assertIn(name, CFG['screens'])
-        self.assertEqual([f.__name__ for f in SUITES['navigation']], ['pick_then_main', 'swipe_to_system', 'swipe_to_ring'])
+        self.assertEqual([f.__name__ for f in SUITES['navigation']],
+                         ['pick_then_main', 'pick_long_press', 'swipe_to_system', 'swipe_to_ring'])
+        self.assertIn('color2', [f.__name__ for f in SUITES['mesh']])
 
     def run_nav(self, fn, brd):
         ctx = FakeCtx(brd, brd.log, tempfile.gettempdir())
@@ -701,6 +703,105 @@ class AppSuites(unittest.TestCase):
         with self.assertRaises(Fail) as e:
             self.run_swipes(old=True)
         self.assertIn('only after "ui: page system"', str(e.exception))
+
+
+class FakeColor2(FakePager):
+    """The pager plus the wave colour: `color2 RRGGBB|auto` answers like the firmware, `cfg` has "color2", `press X Y
+    ms` on a swatch is a long press (new firmware: toggles color2 there, the ring stays) or, with old=True, a tap (the
+    firmware before color2: the colour is set and main slides in). legacy=True: a cfg without "color2"."""
+    SW = {app_suites.swatch_at(i): '#' + h for i, h in enumerate(
+        ['ff0000', 'ff8000', 'ffff00', '80ff00', '00ff00', '00ff80', '00ffff', '0080ff', '0000ff', '8000ff', 'ff00ff',
+         'ff0080'])}
+
+    def __init__(self, color2='auto', old=False, legacy=False, answer=None):
+        super().__init__()
+        self.color2, self.old, self.legacy, self.answer = color2, old, legacy, answer
+
+    def cmd(self, line, expect=None, **kw):
+        m = re.fullmatch(r'color2 (auto|[0-9a-fA-F]{6})', line)
+        if m:
+            self.sent.append(line)
+            v = 'auto' if m.group(1) == 'auto' else '#' + m.group(1).lower()
+            self.color2 = self.answer or v
+            self.log.data.append(f'I (200) cfg: color2 {v}')
+            reply = f'I (201) test: ok color2 {self.color2}'
+            return re.search(expect or r'.*', reply)
+        m = re.fullmatch(r'press (\d+) (\d+) (\d+)', line)
+        if m:
+            self.sent.append(line)
+            hit = self.SW.get((int(m.group(1)), int(m.group(2))))
+            if hit and self.old:
+                self.color = hit
+                self.log.data.append(f'I (300) cfg: color {hit}')
+                self.at = self.pages.index('main')
+            elif hit:
+                self.color2 = 'auto' if self.color2 == hit else hit
+                self.log.data.append(f'I (300) cfg: color2 {self.color2}')
+            return re.search(r'.*', 'test: ok press')
+        return super().cmd(line, expect, **kw)
+
+    def press(self, x=None, y=None, ms=None):
+        self.cmd(f'press {x} {y} {ms}')
+
+    def cfg(self):
+        c = super().cfg()
+        if not self.legacy:
+            c['color2'] = self.color2
+        return c
+
+
+class Color2(unittest.TestCase):
+    def run_fn(self, fn, b):
+        return AppSuites.run_nav(self, fn, b)
+
+    def test_swatch_positions(self):
+        # ui.c: x = 233 + lroundf(180 sin a), y = 233 - lroundf(180 cos a), a = i x 30 degrees
+        self.assertEqual(app_suites.swatch_at(0), app_suites.RED_SWATCH)
+        self.assertEqual(app_suites.GREEN_SWATCH, (389, 323))
+        self.assertEqual(app_suites.swatch_at(3), (413, 233))
+        self.assertGreaterEqual(app_suites.LONG_PRESS_MS, 400 + 200)    # LVGL's 400 ms with a margin
+
+    def test_console_passes_and_puts_back(self):
+        b = FakeColor2(color2='#ff00ff')
+        ctx = self.run_fn(app_suites.color2, b)
+        self.assertEqual(b.sent, ['color2 00ff00', 'color2 auto', 'color2 ff00ff'])
+        self.assertEqual(b.color2, '#ff00ff')
+        self.assertIn('#00ff00 then auto', ctx.notes[0])
+
+    def test_console_auto_is_not_put_back_again(self):
+        b = FakeColor2(color2='auto')
+        self.run_fn(app_suites.color2, b)
+        self.assertEqual(b.sent, ['color2 00ff00', 'color2 auto'])
+
+    def test_console_fails_on_a_firmware_without_it(self):
+        with self.assertRaises(Fail) as e:
+            self.run_fn(app_suites.color2, FakeColor2(legacy=True))
+        self.assertIn('no "color2"', str(e.exception))
+
+    def test_console_fails_on_a_wrong_answer(self):
+        with self.assertRaises(Fail) as e:
+            self.run_fn(app_suites.color2, FakeColor2(answer='#010101'))
+        self.assertIn('answered #010101', str(e.exception))
+
+    def test_long_press_passes(self):
+        b = FakeColor2()
+        ctx = self.run_fn(app_suites.pick_long_press, b)
+        self.assertEqual([s for s in b.sent if s.startswith('press')], ['press 389 323 800'] * 2)
+        self.assertEqual((b.color2, b.color, b.pages[b.at]), ('auto', '#00ff00', 'pick'))
+        self.assertIn('the ring stayed', ctx.notes[0])
+
+    def test_long_press_starts_from_auto_and_puts_back(self):
+        b = FakeColor2(color2='#0000ff')
+        self.run_fn(app_suites.pick_long_press, b)
+        self.assertEqual(b.sent[0], 'color2 auto')
+        self.assertEqual(b.sent[-1], 'color2 0000ff')
+        self.assertEqual(b.color2, '#0000ff')
+
+    def test_long_press_fails_when_it_is_a_tap(self):
+        # the firmware before color2 (or a long press that also counts as a tap): the colour is set, main slides in
+        with self.assertRaises(Fail) as e:
+            self.run_fn(app_suites.pick_long_press, FakeColor2(old=True))
+        self.assertIn('the long press on the green swatch', str(e.exception))
 
 
 class WaveTap(unittest.TestCase):

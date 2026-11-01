@@ -1,5 +1,6 @@
 // wave.c: the opposite colour, a wave's lifetime, the frame geometry (disc, ring, black corners), each kind's
-// direction, the per-pixel merge in linear light (sum, normalise, fade), every fast path against a slow floating
+// direction, a chosen colour B against the automatic opposite, the per-pixel merge in linear light (sum, normalise,
+// fade), every fast path against a slow floating
 // point reference of the rule in wave.h, band-by-band filling, and the time of a frame (printed, not asserted).
 #include <math.h>
 #include <stdlib.h>
@@ -49,7 +50,13 @@ static void render(const wave_t *w, int n, uint32_t now, const scene_t *s) { ren
 
 static wave_t wv(uint8_t kind, uint8_t r, uint8_t g, uint8_t b, uint32_t start)
 {
-    wave_t w = { kind, r, g, b, start };
+    wave_t w = { kind, r, g, b, start, 0, 0, 0, false };   // colour B automatic
+    return w;
+}
+// The same with a chosen colour B
+static wave_t wv2(uint8_t kind, uint8_t r, uint8_t g, uint8_t b, uint32_t start, uint8_t b2r, uint8_t b2g, uint8_t b2b)
+{
+    wave_t w = { kind, r, g, b, start, b2r, b2g, b2b, true };
     return w;
 }
 
@@ -86,8 +93,8 @@ static c565_t reference(int x, int y, const wave_t *w, int n, uint32_t now, cons
         double ph = fmod(d - WAVE_SPEED_PX_S * t, WAVE_PITCH_PX);
         if (ph < 0) ph += WAVE_PITCH_PX;
         double f = (1 - cos(2 * PI * ph / WAVE_PITCH_PX)) / 2;
-        uint8_t br, bg, bb;
-        wave_opposite(w[i].r, w[i].g, w[i].b, &br, &bg, &bb);
+        uint8_t br = w[i].b2r, bg = w[i].b2g, bb = w[i].b2b;
+        if (!w[i].b2_set) wave_opposite(w[i].r, w[i].g, w[i].b, &br, &bg, &bb);
         sum[0] += wt * (lin(w[i].r) * (1 - f) + lin(br) * f);
         sum[1] += wt * (lin(w[i].g) * (1 - f) + lin(bg) * f);
         sum[2] += wt * (lin(w[i].b) * (1 - f) + lin(bb) * f);
@@ -230,6 +237,48 @@ static void test_centre(void)
     CHECK(!near(at(233, 233), c565(0xFF, 0x80, 0x00), 2), "t=100 ms: the centre is no longer the crest");
 }
 
+// A chosen colour B shows at the troughs instead of the opposite hue; the crests stay colour A; automatic unchanged
+static void test_color2(void)
+{
+    // orange A: automatic B is about #0080ff (blue), chosen B green #00ff00
+    wave_t a = wv(WAVE_CENTRE, 0xFF, 0x80, 0x00, 7000);
+    wave_t g = wv2(WAVE_CENTRE, 0xFF, 0x80, 0x00, 7000, 0x00, 0xFF, 0x00);
+    render(&g, 1, 7000, &NOHOLD);
+    CHECK(near(at(233, 233), c565(0xFF, 0x80, 0x00), 0), "colour B chosen: colour A at the crest (centre, t=0)");
+    CHECK(near(at(233 + WAVE_PITCH_PX / 2, 233), c565(0x00, 0xFF, 0x00), 1), "colour B chosen: green at pitch/2");
+    CHECK(near(at(233, 233 - WAVE_PITCH_PX / 2), c565(0x00, 0xFF, 0x00), 1), "colour B chosen: green at pitch/2 above");
+    CHECK(!near(at(233 + WAVE_PITCH_PX / 2, 233), c565(0x00, 0x7F, 0xFF), 4), "colour B chosen: not the opposite hue");
+    render(&a, 1, 7000, &NOHOLD);
+    CHECK(near(at(233 + WAVE_PITCH_PX / 2, 233), c565(0x00, 0x7F, 0xFF), 1), "automatic: still the opposite hue");
+    // the same wave_t values with b2_set false ignore b2r/b2g/b2b
+    wave_t junk = a;
+    junk.b2r = 0x12;
+    junk.b2g = 0x34;
+    junk.b2b = 0x56;
+    render(&junk, 1, 7000, &NOHOLD);
+    CHECK(near(at(233 + WAVE_PITCH_PX / 2, 233), c565(0x00, 0x7F, 0xFF), 1), "b2_set false: the colour B bytes ignored");
+    // a linear kind too: a band from the left, troughs at d = pitch/2 at t=0
+    wave_t l = wv2(WAVE_LEFT, 0xFF, 0x00, 0x00, 100, 0xFF, 0xFF, 0x00);
+    render(&l, 1, 100, &NOHOLD);
+    CHECK(near(at(128, 233), c565(0xFF, 0x00, 0x00), 0), "left, colour B chosen: red at the crest");
+    CHECK(near(at(128 + WAVE_PITCH_PX / 2, 233), c565(0xFF, 0xFF, 0x00), 1), "left, colour B chosen: yellow trough");
+    // the frame cache: the same inputs except colour B are redrawn
+    static uint16_t ref[W * H];
+    render(&a, 1, 7300, &NOHOLD);
+    memcpy(ref, fb, sizeof(fb));
+    render(&g, 1, 7300, &NOHOLD);
+    CHECK(memcmp(ref, fb, sizeof(fb)) != 0, "a chosen colour B at the same time is redrawn");
+    wave_t g2 = g;
+    g2.b2b = 0x80;
+    memcpy(ref, fb, sizeof(fb));
+    render(&g2, 1, 7300, &NOHOLD);
+    CHECK(memcmp(ref, fb, sizeof(fb)) != 0, "another chosen colour B at the same time is redrawn");
+    render(&a, 1, 7300, &NOHOLD);
+    memcpy(ref, fb, sizeof(fb));
+    render(&junk, 1, 7300, &NOHOLD);
+    CHECK(!memcmp(ref, fb, sizeof(fb)), "automatic with other unused bytes: the same frame");
+}
+
 // A linear kind: at t=0 a crest at distance 128 from its edge; 100 ms later (16 px) at 144, not at 112
 static void test_direction(uint8_t kind, const char *name)
 {
@@ -334,6 +383,12 @@ static void test_reference(void)
     // dim colours: the sum is normalised, so a dim sender's wave shows at full brightness
     wave_t dim = wv(WAVE_CENTRE, 40, 20, 0, 0);
     compare("dim centre", &dim, 1, 600, &NOHOLD, 1);
+    // chosen colours B, alone and merged with automatic ones (every group)
+    wave_t c2 = wv2(WAVE_CENTRE, 255, 128, 0, 50, 0, 255, 0);
+    compare("centre, colour B chosen", &c2, 1, 1234, &NOHOLD, 1);
+    wave_t mix2[4] = { wv2(WAVE_CENTRE, 255, 0, 0, 0, 255, 255, 255), wv(WAVE_LEFT, 0, 255, 0, 500),
+                       wv2(WAVE_TOP, 0, 0, 255, 900, 255, 128, 0), wv(WAVE_CENTRE, 90, 30, 0, 300) };
+    compare("mixed colours B + holder", mix2, 4, 2100, &hold, 1);
 }
 
 static void test_bands(void)
@@ -415,6 +470,7 @@ int main(void)
     test_geometry();
     test_holder();
     test_centre();
+    test_color2();
     test_direction(WAVE_LEFT, "left");
     test_direction(WAVE_RIGHT, "right");
     test_direction(WAVE_TOP, "top");

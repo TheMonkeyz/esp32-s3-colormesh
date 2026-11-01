@@ -56,6 +56,7 @@ typedef struct {
 
 static volatile bool holding, dev_mode, connectable, adv_paused, scan_paused, synced;
 static volatile uint8_t own_r, own_g, own_b, target = MP_TARGET_NONE;
+static volatile uint32_t own_b2;        // the waves' colour B: 0x01rrggbb when chosen, 0 = automatic (one word: no torn read)
 static uint8_t own_addr_type;
 static uint8_t own_raw[6];
 static volatile uint8_t own_origin;
@@ -272,6 +273,13 @@ static void do_refresh(void)
     s.target = target;
     s.effect = own_effect;
     s.effect_seq = own_effect_seq;
+    uint32_t b2 = own_b2;                            // bytes 19-21: 0, 0, 0 = automatic
+    if (b2) {
+        s.b2r = (uint8_t)(b2 >> 16);
+        s.b2g = (uint8_t)(b2 >> 8);
+        s.b2b = (uint8_t)b2;
+        if (!(s.b2r | s.b2g | s.b2b)) s.b2r = s.b2g = s.b2b = 1;   // a chosen black: #010101 (0 means automatic)
+    }
     bool h = holding;
     uint8_t buf[MP_AD_SIZE];
     xSemaphoreTake(table_lock, portMAX_DELAY);
@@ -349,8 +357,17 @@ static bool wave_over(const wave_t *w, uint32_t now)
     return w->kind == WAVE_NONE || ((int32_t)(now - w->start_ms) >= 0 && !wave_active(w, now));
 }
 
-// A wave starts here now (table_lock held): a free slot, else the one that started first
-static void wave_add_locked(uint8_t kind, uint8_t r, uint8_t g, uint8_t b, uint32_t now)
+// " B #rrggbb" for a chosen colour B (0x01rrggbb), "" for automatic: the end of a "mesh: wave" line
+static const char *b2_note(char out[12], uint32_t b2)
+{
+    if (b2) snprintf(out, 12, " B #%06lx", (unsigned long)(b2 & 0xFFFFFF));
+    else out[0] = 0;
+    return out;
+}
+
+// A wave starts here now (table_lock held): a free slot, else the one that started first. b2: colour B as
+// 0x01rrggbb, 0 = automatic (wave_opposite)
+static void wave_add_locked(uint8_t kind, uint8_t r, uint8_t g, uint8_t b, uint32_t b2, uint32_t now)
 {
     int k = -1;
     for (int i = 0; i < WAVE_MAX && k < 0; i++) if (wave_over(&waves[i], now)) k = i;
@@ -358,11 +375,12 @@ static void wave_add_locked(uint8_t kind, uint8_t r, uint8_t g, uint8_t b, uint3
         k = 0;
         for (int i = 1; i < WAVE_MAX; i++) if ((int32_t)(waves[i].start_ms - waves[k].start_ms) < 0) k = i;
     }
-    waves[k] = (wave_t){ .kind = kind, .r = r, .g = g, .b = b, .start_ms = now };
+    waves[k] = (wave_t){ .kind = kind, .r = r, .g = g, .b = b, .start_ms = now, .b2r = (uint8_t)(b2 >> 16),
+                         .b2g = (uint8_t)(b2 >> 8), .b2b = (uint8_t)b2, .b2_set = b2 != 0 };
     waves_any = true;
 }
 
-// One decoded report: a peer's new effect starts its wave (receiver time, its colour)
+// One decoded report: a peer's new effect starts its wave (receiver time, its colour and its colour B)
 static void peer_effect(const uint8_t addr[6], const mp_state_t *st, uint32_t now)
 {
     int k = -1, oldest = 0;
@@ -396,9 +414,12 @@ static void peer_effect(const uint8_t addr[6], const mp_state_t *st, uint32_t no
     ESP_LOGD(TAG_BLE, "effect %s %u (seq %u)", a, st->effect, st->effect_seq);
     if (st->effect > WAVE_BOTTOM) return;             // a kind this build does not know
     xSemaphoreTake(table_lock, portMAX_DELAY);
-    wave_add_locked(st->effect, st->r, st->g, st->b, now);
+    uint32_t b2 = (st->b2r | st->b2g | st->b2b) ? 0x01000000u | (uint32_t)st->b2r << 16 | (uint32_t)st->b2g << 8 | st->b2b
+                                                : 0;
+    wave_add_locked(st->effect, st->r, st->g, st->b, b2, now);
     xSemaphoreGive(table_lock);
-    ESP_LOGI(TAG, "wave %s from %s", mesh_wave_name(st->effect), a);
+    char note[12];
+    ESP_LOGI(TAG, "wave %s from %s%s", mesh_wave_name(st->effect), a, b2_note(note, b2));
 }
 
 static void mesh_task(void *arg)
@@ -573,6 +594,7 @@ void mesh_start(void)
     own_g = c->g;
     own_b = c->b;
     dev_mode = c->dev_mode;
+    own_b2 = c->b2_set ? 0x01000000u | (uint32_t)c->b2_r << 16 | (uint32_t)c->b2_g << 8 | c->b2_b : 0;
     mp_ver_from_string(esp_app_get_description()->version, own_ver);
     mp_table_init(&table, 0, 0);
     table_lock = xSemaphoreCreateMutex();
@@ -612,6 +634,16 @@ void mesh_set_color(uint8_t r, uint8_t g, uint8_t b)
     own_r = r;
     own_g = g;
     own_b = b;
+    refresh_req = true;
+    wake();
+}
+
+void mesh_set_color2(uint8_t r, uint8_t g, uint8_t b, bool set)
+{
+    if (set && !(r | g | b)) r = g = b = 1;          // as config_set_color2: black is #010101
+    uint32_t v = set ? 0x01000000u | (uint32_t)r << 16 | (uint32_t)g << 8 | b : 0;
+    if (v == own_b2) return;
+    own_b2 = v;
     refresh_req = true;
     wake();
 }
@@ -740,10 +772,12 @@ uint8_t mesh_wave_kind(const char *name)
 void mesh_start_wave(uint8_t kind)
 {
     if (kind == WAVE_NONE || kind > WAVE_BOTTOM || !table_lock) return;
+    uint32_t b2 = own_b2;
     xSemaphoreTake(table_lock, portMAX_DELAY);
-    wave_add_locked(kind, own_r, own_g, own_b, now_ms());   // here at once, in its own colour
+    wave_add_locked(kind, own_r, own_g, own_b, b2, now_ms());   // here at once, in its own colours
     xSemaphoreGive(table_lock);
-    ESP_LOGI(TAG, "wave %s from self", mesh_wave_name(kind));
+    char note[12];
+    ESP_LOGI(TAG, "wave %s from self%s", mesh_wave_name(kind), b2_note(note, b2));
     effect_kind_req = kind;
     effect_req = true;
     wake();

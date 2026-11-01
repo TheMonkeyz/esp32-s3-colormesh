@@ -5,6 +5,11 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.3.0-rc.1 - 2026-11-01
+- Choose the wave's second colour: hold a swatch on the colour ring (a dot marks it); hold it again for automatic
+  (the opposite of your colour). Also `color2 RRGGBB|auto` on the console and a "Wave colour" row on the USB card.
+  Your choice travels with the wave, so every board draws your pair.
+
 ## v0.2.0 - 2026-11-01
 Second release. Everything in v0.1.0 plus:
 - Waves: tap the main screen to send a bicolour wave to every board nearby (centre = rings growing outward;

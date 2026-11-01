@@ -20,6 +20,9 @@ typedef struct {
 void mesh_start(void);                                  // after config_load(): reads config_get()
 void mesh_set_holding(bool on);                         // the finger is down on the main screen ("mesh: hold on|off")
 void mesh_set_color(uint8_t r, uint8_t g, uint8_t b);   // this board's colour
+// The waves' colour B (set), or automatic (!set: the opposite hue): the own waves use it, and the advert carries it
+// (bytes 19-21) so that the peers draw this board's waves with it too
+void mesh_set_color2(uint8_t r, uint8_t g, uint8_t b, bool set);
 void mesh_set_dev_mode(bool on);
 void mesh_get_mix(uint8_t *r, uint8_t *g, uint8_t *b);  // the mix of every holder, this board included
 int mesh_peers(mesh_peer_t *out, int max);              // the peers heard, up to max; returns the count
@@ -31,10 +34,12 @@ bool mesh_peer_holding(void);                           // any peer heard holdin
 // Starts a wave of this board's colour (kind: WAVE_CENTRE..WAVE_BOTTOM) here at once ("mesh: wave <kind> from self")
 // and on every board nearby: the advert carries effect = kind and a bumped effect_seq for MESH_EFFECT_MS, then
 // effect 0 again. A peer's report with a new (effect != 0, effect_seq) starts its wave here at the time it is heard
-// ("mesh: wave <kind> from <addr>"). Any task; no radio work in the caller (the mesh task re-advertises).
+// ("mesh: wave <kind> from <addr>") with the peer's colour B (its bytes 19-21; 0, 0, 0 = automatic). Any task; no
+// radio work in the caller (the mesh task re-advertises).
 #define MESH_EFFECT_MS 1000
 void mesh_start_wave(uint8_t kind);
-// The active waves (own and peers'), up to max; expired ones are dropped. "mesh: wave end" when the last one ends.
+// The active waves (own and peers', colour B included), up to max; expired ones are dropped. "mesh: wave end" when the
+// last one ends.
 int mesh_waves(wave_t *out, int max, uint32_t now_ms);
 const char *mesh_wave_name(uint8_t kind);               // "centre", "left", "right", "top", "bottom", "?"
 uint8_t mesh_wave_kind(const char *name);               // the reverse; WAVE_NONE for anything else

@@ -42,6 +42,7 @@ static const char *TAG = "ui";
 #define SW_N       12                         // pick: swatches
 #define SW_R       22
 #define SW_RING    180
+#define SW_DOT_R   6                          // pick: the inner dot on the swatch chosen as the waves' colour B
 #define SYS_ROWS   6                          // system: peers listed
 #define HOLD_IDLE_MS 150                      // safety net: no finger for this long = released
 #define TAP_CENTRE_R 100                      // main: a tap this close to the centre starts rings, else bands
@@ -55,7 +56,7 @@ enum { PG_PICK, PG_MAIN, PG_SYS, PG_N };       // the pager's pages, left to rig
 static const char *const page_name[PG_N] = { "pick", "main", "system" };
 
 static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *scr_msg;
-static lv_obj_t *p_title, *p_sub, *p_back, *p_sw[SW_N];
+static lv_obj_t *p_title, *p_sub, *p_back, *p_sw[SW_N], *p_dot[SW_N];
 static lv_obj_t *mn_ring, *mn_disc, *mn_arc, *mn_hint, *mn_near, *mn_dev, *mn_dot[MAX_DOTS];
 static lv_obj_t *s_title, *s_lines, *s_peers, *s_row[SYS_ROWS], *s_sw[SYS_ROWS];
 static lv_obj_t *m_title, *m_body;
@@ -134,23 +135,38 @@ void ui_fmt_ver(const uint8_t ver[4], char *out, int n)
     else if (k > 200) snprintf(out + m, n - m, "+%d", k - 201);
 }
 
+static bool bright(uint32_t v)       // text on top of it should be dark
+{
+    int r = v >> 16, g = v >> 8 & 0xFF, b = v & 0xFF;
+    return r * 299 + g * 587 + b * 114 > 130 * 1000;   // green (149 685) is bright, red (76 245) not
+}
+
 /* ---------- pick ---------- */
 
 static uint32_t pick_shown_rgb = 0xFFFFFFFFu;   // the colour the outline was drawn for
+static uint32_t pick_shown_b2 = 0xFFFFFFFFu;    // the colour B the dot was drawn for (0x01rrggbb, 0 = automatic)
 
-static void pick_update(void)                    // the saved colour's swatch gets the white outline
+static uint32_t cfg_b2(const app_cfg_t *c) { return c->b2_set ? 0x01000000u | rgb(c->b2_r, c->b2_g, c->b2_b) : 0; }
+
+// The saved colour's swatch gets the white outline; the colour B's (when it is one of the swatches) the inner dot
+static void pick_update(void)
 {
     const app_cfg_t *c = config_get();
-    uint32_t v = rgb(c->r, c->g, c->b);
-    if (v == pick_shown_rgb) return;
-    pick_shown_rgb = v;
-    for (int i = 0; i < SW_N; i++) lv_obj_set_style_outline_width(p_sw[i], sw_rgb[i] == v ? 3 : 0, 0);
+    uint32_t v = rgb(c->r, c->g, c->b), b2 = cfg_b2(c);
+    if (v != pick_shown_rgb) {
+        pick_shown_rgb = v;
+        for (int i = 0; i < SW_N; i++) lv_obj_set_style_outline_width(p_sw[i], sw_rgb[i] == v ? 3 : 0, 0);
+    }
+    if (b2 != pick_shown_b2) {
+        pick_shown_b2 = b2;
+        for (int i = 0; i < SW_N; i++) set_hidden(p_dot[i], !b2 || sw_rgb[i] != (b2 & 0xFFFFFF));
+    }
 }
 
 static void pick_refresh(void)
 {
     set_text(p_title, tr(T_PICK_COLOUR));
-    set_text(p_sub, tr(T_TAP_ONE));
+    set_text(p_sub, tr(T_PICK_HINT));
     set_text(p_back, tr(T_SWIPE_BACK));
     pick_update();
 }
@@ -177,6 +193,29 @@ static void swatch_tapped(lv_event_t *e)
     slide_change(1, false, to_main, NULL);   // the ring slides out to the left, main comes in from the right
 }
 
+// A long press (LVGL's 400 ms, the finger still: 10 px of movement would have made it a pager drag first) chooses
+// the waves' colour B: this swatch, or automatic again if this swatch already was colour B. The ring stays shown (the
+// dot is the answer); the touch is then LVGL's no more (lv_indev_wait_release), so its release is not also a tap.
+static void swatch_long_pressed(lv_event_t *e)
+{
+    if (!slide_tap_ok() || lv_screen_active() != scr_pager || pager_current(pager) != PG_PICK) return;
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    uint8_t r = sw_rgb[i] >> 16, g = sw_rgb[i] >> 8 & 0xFF, b = sw_rgb[i] & 0xFF;
+    const app_cfg_t *c = config_get();
+    if (cfg_b2(c) == (0x01000000u | sw_rgb[i])) {
+        ESP_LOGI(TAG, "wave colour auto (held #%06lx again)", (unsigned long)sw_rgb[i]);
+        config_clear_color2();
+        mesh_set_color2(0, 0, 0, false);
+    } else {
+        ESP_LOGI(TAG, "wave colour #%06lx (held)", (unsigned long)sw_rgb[i]);
+        config_set_color2(r, g, b);
+        mesh_set_color2(r, g, b, true);
+    }
+    pick_update();
+    lv_indev_t *in = lv_indev_active();
+    if (in) lv_indev_wait_release(in);          // the long press isn't also a tap
+}
+
 static void pick_create_page(lv_obj_t *pg)
 {
     for (int i = 0; i < SW_N; i++) {
@@ -196,6 +235,12 @@ static void pick_create_page(lv_obj_t *pg)
         lv_obj_add_flag(s, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_ext_click_area(s, 8);              // 22 px is small for a finger; neighbours are 94 px apart
         lv_obj_add_event_cb(s, swatch_tapped, LV_EVENT_SHORT_CLICKED, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(s, swatch_long_pressed, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
+        lv_obj_t *d = p_dot[i] = shape(s, 2 * SW_DOT_R);   // colour B's mark: black on a bright swatch, else white
+        lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(d, bright(sw_rgb[i]) ? C_BG : lv_color_white(), 0);
+        lv_obj_center(d);
+        lv_obj_add_flag(d, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_t *box = lv_obj_create(pg);                // the three lines, centred together whatever wraps
     lv_obj_remove_style_all(box);
@@ -206,7 +251,7 @@ static void pick_create_page(lv_obj_t *pg)
     lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_center(box);
     p_title = label(box, f_mid, C_TEXT, 0, 270);
-    p_sub = label(box, f_small, C_DIM, 0, 260);
+    p_sub = label(box, f_tiny, C_DIM, 0, 280);      // two lines; "Maintenez : couleur des vagues" is 319 px at 20 px
     p_back = label(box, f_tiny, C_HINT, 0, 220);
     pick_refresh();
 }
@@ -220,12 +265,6 @@ static struct {
     int prog, npeers;
     uint32_t dots[MAX_DOTS];          // rgb | holding << 24
 } last = { .own = UINT32_MAX, .mix = UINT32_MAX, .prog = -2, .npeers = -1 };
-
-static bool bright(uint32_t v)       // text on top of it should be dark
-{
-    int r = v >> 16, g = v >> 8 & 0xFF, b = v & 0xFF;
-    return r * 299 + g * 587 + b * 114 > 130 * 1000;   // green (149 685) is bright, red (76 245) not
-}
 
 static void main_update(bool texts)
 {

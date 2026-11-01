@@ -10,7 +10,8 @@ X(T_STARTING,       "Starting...",                 "Démarrage...")
 
 // Pick screen (the pager's first page, left of main)
 X(T_PICK_COLOUR,    "Pick your colour",            "Choisissez votre couleur")
-X(T_TAP_ONE,        "Tap one",                     "Touchez une pastille")
+// A tap on a swatch sets the colour, a hold (400 ms, finger still) the waves' colour B (again: back to automatic)
+X(T_PICK_HINT,      "Tap: your colour\nHold: wave colour", "Touchez : votre couleur\nMaintenez : couleur des vagues")
 X(T_SWIPE_BACK,     "Swipe left to go back",       "Glissez vers la gauche\npour revenir")
 
 // Main screen (the version string already starts with "v")

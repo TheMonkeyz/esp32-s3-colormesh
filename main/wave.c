@@ -177,8 +177,8 @@ static unsigned wave_lut(const wave_t *w, uint32_t now_ms)
     uint32_t t = now_ms - w->start_ms;
     unsigned wt = t >= WAVE_DURATION_MS - WAVE_FADE_MS ? (unsigned)((WAVE_DURATION_MS - t) * 256u / WAVE_FADE_MS) : 256u;
     unsigned off = (unsigned)(((uint64_t)t * WAVE_SPEED_PX_S * 256u / ((uint64_t)WAVE_PITCH_PX * 1000u)) & 255u);
-    uint8_t br, bg, bb;
-    wave_opposite(w->r, w->g, w->b, &br, &bg, &bb);
+    uint8_t br = w->b2r, bg = w->b2g, bb = w->b2b;      // colour B: the sender's choice, else the opposite hue
+    if (!w->b2_set) wave_opposite(w->r, w->g, w->b, &br, &bg, &bb);
     uint32_t ar = lin16[w->r], ag = lin16[w->g], ab = lin16[w->b], cr = lin16[br], cg = lin16[bg], cb = lin16[bb];
     int sh = 8 + F.shift;
     for (unsigned k = 0; k < 256; k++) {
@@ -196,7 +196,9 @@ static bool same_inputs(const wave_t *waves, int n, uint32_t now_ms, uint8_t hr,
     if (holding && (F.hr != hr || F.hg != hg || F.hb != hb)) return false;
     for (int i = 0; i < n; i++)
         if (F.w[i].kind != waves[i].kind || F.w[i].r != waves[i].r || F.w[i].g != waves[i].g ||
-            F.w[i].b != waves[i].b || F.w[i].start_ms != waves[i].start_ms) return false;
+            F.w[i].b != waves[i].b || F.w[i].start_ms != waves[i].start_ms || F.w[i].b2_set != waves[i].b2_set ||
+            (waves[i].b2_set && (F.w[i].b2r != waves[i].b2r || F.w[i].b2g != waves[i].b2g ||
+                                 F.w[i].b2b != waves[i].b2b))) return false;
     return true;
 }
 

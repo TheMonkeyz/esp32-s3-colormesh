@@ -7,7 +7,8 @@
 // Geometry: the disc is the screen's circle, radius 233 around the screen centre measured to pixel centres (so it is
 // symmetric like LVGL's 466 px circle: pixel (x, y) is inside when (2x+1-466)^2 + (2y+1-466)^2 <= 466^2); the edge
 // ring is its outer WAVE_RING_PX, as the main screen draws it. A centre wave's distance is from pixel (233, 233).
-// A wave's crest colour is the sender's colour A, its trough colour B = wave_opposite(A); its phase at a pixel is
+// A wave's crest colour is the sender's colour A, its trough colour B: the sender's chosen one (b2_set), else
+// wave_opposite(A); its phase at a pixel is
 // (d - WAVE_SPEED_PX_S * t) mod WAVE_PITCH_PX, d the distance from its origin: centre: radial; left: x;
 // right: 465 - x; top: y; bottom: 465 - y. Crests move away from the origin. It fades out over its last 500 ms.
 #include <stdbool.h>
@@ -15,7 +16,9 @@
 #include <stdint.h>
 
 typedef enum { WAVE_NONE = 0, WAVE_CENTRE = 1, WAVE_LEFT = 2, WAVE_RIGHT = 3, WAVE_TOP = 4, WAVE_BOTTOM = 5 } wave_kind_t;
-typedef struct { uint8_t kind; uint8_t r, g, b; uint32_t start_ms; } wave_t;     // colour A = the sender's colour; colour B = wave_opposite(A)
+// colour A = the sender's colour; colour B = b2r, b2g, b2b when b2_set, else wave_opposite(A). The fields after
+// start_ms may be left out of an initialiser (zero: automatic).
+typedef struct { uint8_t kind; uint8_t r, g, b; uint32_t start_ms; uint8_t b2r, b2g, b2b; bool b2_set; } wave_t;
 #define WAVE_MAX 8                 // wave_fill draws at most this many waves (more are ignored)
 #define WAVE_DURATION_MS 4000      // a wave runs this long after its start
 #define WAVE_FADE_MS 500           // ...and fades out over its last WAVE_FADE_MS

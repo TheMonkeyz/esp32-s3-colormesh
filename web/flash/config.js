@@ -1,7 +1,7 @@
 // Configure over USB: the flasher page's card talks to a ColorMesh board through Web Serial (Chrome / Edge on a
 // computer, https or localhost) at 115200 baud, using the firmware's USB console (docs/PROTOCOL.md §2): `cfg`
-// answers one JSON line `test: cfg {...}`; `color RRGGBB`, `name <text>`, `devmode on|off` and `bright N` set the
-// values and answer `test: ok ...` or `test: error ...`. The console's answers are ESP-IDF log lines
+// answers one JSON line `test: cfg {...}`; `color RRGGBB`, `color2 RRGGBB|auto` (the waves' second colour),
+// `name <text>`, `devmode on|off` and `bright N` set the values and answer `test: ok ...` or `test: error ...`. The console's answers are ESP-IDF log lines
 // (`I (1234) test: ...`), so the parser tolerates that prefix, colour codes and CRLF. The pure functions are
 // exported for web/flash/config.test.js (Node, no dependencies); the DOM part runs only in a browser.
 'use strict';
@@ -46,8 +46,32 @@ function presetHex(i) {
   return rgb.map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
 }
 
+// The waves' second colour from cfg's "color2": "auto" -> {auto: true}; "#rrggbb" -> {auto: false, hex}; anything
+// else (an older firmware without it) -> null
+function color2State(v) {
+  if (v === 'auto') return { auto: true };
+  const h = hexColor(v === undefined || v === null ? '' : v);
+  return h ? { auto: false, hex: h } : null;
+}
+
+// The console command for the wave colour: automatic -> "color2 auto"; else "color2 rrggbb" (null for a bad colour)
+function color2Command(auto, hex) {
+  if (auto) return 'color2 auto';
+  const h = hexColor(hex === undefined || hex === null ? '' : hex);
+  return h ? 'color2 ' + h : null;
+}
+
+// The automatic wave colour: the opposite hue with the same saturation and value (the firmware's wave_opposite:
+// each channel c -> max + min - c); null for a bad colour
+function oppositeHex(hex) {
+  const h = hexColor(hex === undefined || hex === null ? '' : hex);
+  if (!h) return null;
+  const c = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)), s = Math.max(...c) + Math.min(...c);
+  return c.map(v => (s - v).toString(16).padStart(2, '0')).join('');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseLine, extractCfg, splitLines, hexColor, presetHex };
+  module.exports = { parseLine, extractCfg, splitLines, hexColor, presetHex, color2State, color2Command, oppositeHex };
 }
 
 if (typeof document !== 'undefined') initConfigCard();
@@ -79,15 +103,33 @@ function initConfigCard() {
     return;
   }
 
-  const sw = el('cfg-swatches');
-  for (let i = 0; i < 12; i++) {
-    const h = presetHex(i), b = document.createElement('button');
-    b.type = 'button'; b.className = 'swatch'; b.dataset.hex = h;
-    b.style.background = '#' + h; b.title = '#' + h; b.setAttribute('aria-label', 'Colour #' + h);
-    b.onclick = () => setColor(h);
-    sw.appendChild(b);
+  function addSwatches(box, label, pick) {
+    for (let i = 0; i < 12; i++) {
+      const h = presetHex(i), b = document.createElement('button');
+      b.type = 'button'; b.className = 'swatch'; b.dataset.hex = h;
+      b.style.background = '#' + h; b.title = '#' + h; b.setAttribute('aria-label', label + ' #' + h);
+      b.onclick = () => pick(h);
+      box.appendChild(b);
+    }
   }
-  function markSwatch(h) { for (const b of sw.children) b.setAttribute('aria-pressed', String(b.dataset.hex === h)); }
+  const sw = el('cfg-swatches'), sw2 = el('cfg-swatches2');
+  addSwatches(sw, 'Colour', h => setColor(h));
+  addSwatches(sw2, 'Wave colour', h => setColor2(h));
+  function markIn(box, h) { for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.hex === h)); }
+  function markSwatch(h) { markIn(sw, h); }
+  // Automatic: the picker shows the opposite of the colour, greyed; unchecked: a pick sends "color2 RRGGBB"
+  let color2Auto = true;
+  function showColor2(auto, hex) {
+    color2Auto = auto;
+    el('cfg-color2-auto').checked = auto;
+    el('cfg-color2').disabled = auto;
+    for (const b of sw2.children) b.disabled = auto;
+    el('cfg-color2-row').classList.toggle('off', auto);
+    const h = auto ? oppositeHex(el('cfg-color').value) : hexColor(hex || '');
+    if (h) el('cfg-color2').value = '#' + h;
+    markIn(sw2, auto ? null : h);
+    el('cfg-color2-note').textContent = auto ? 'the opposite of the colour' : (hex ? '' : 'pick one');
+  }
 
   async function send(cmd) {
     if (!port || !port.writable) { say('Not connected.', true); return; }
@@ -97,12 +139,23 @@ function initConfigCard() {
     finally { w.releaseLock(); }
   }
   function refreshSoon() { clearTimeout(cfgTimer); cfgTimer = setTimeout(() => send('cfg'), 300); }
-  function setColor(h) { el('cfg-color').value = '#' + h; markSwatch(h); send('color ' + h); refreshSoon(); }
+  function setColor(h) {
+    el('cfg-color').value = '#' + h; markSwatch(h); send('color ' + h); refreshSoon();
+    if (color2Auto) showColor2(true);
+  }
+  function setColor2(h) {
+    const cmd = color2Command(false, h);
+    if (!cmd) return;
+    showColor2(false, h); send(cmd); refreshSoon();
+  }
 
   function render(c) {
     panel.hidden = false;
     const h = hexColor(c.color);
     if (h) { el('cfg-color').value = '#' + h; markSwatch(h); }
+    const c2 = color2State(c.color2);
+    el('cfg-color2-row').hidden = el('cfg-color2-auto-row').hidden = !c2;   // an older firmware: no wave colour
+    if (c2) showColor2(c2.auto, c2.hex);
     if (document.activeElement !== el('cfg-name')) el('cfg-name').value = c.name || '';
     el('cfg-dev').checked = !!c.dev;
     const b = Number.isFinite(c.bright) ? Math.max(0, Math.min(100, c.bright)) : 100;
@@ -186,6 +239,11 @@ function initConfigCard() {
   btnDisconnect.onclick = disconnect;
   btnRefresh.onclick = () => send('cfg');
   el('cfg-color').onchange = ev => { const h = hexColor(ev.target.value); if (h) setColor(h); };
+  el('cfg-color2').onchange = ev => { const h = hexColor(ev.target.value); if (h) setColor2(h); };
+  el('cfg-color2-auto').onchange = ev => {
+    if (ev.target.checked) { showColor2(true); send(color2Command(true)); refreshSoon(); }
+    else showColor2(false);                          // nothing sent until a colour is picked
+  };
   el('cfg-name-set').onclick = () => { send('name ' + el('cfg-name').value.trim().slice(0, 16)); refreshSoon(); };
   el('cfg-name').onkeydown = ev => { if (ev.key === 'Enter') el('cfg-name-set').click(); };
   el('cfg-dev').onchange = ev => { send('devmode ' + (ev.target.checked ? 'on' : 'off')); refreshSoon(); };

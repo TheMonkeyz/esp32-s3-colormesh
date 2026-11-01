@@ -46,21 +46,44 @@ static int hexval(char c)
 
 /* ---------- settings ---------- */
 
+// "RRGGBB" or "#RRGGBB" into v
+static bool parse_rgb(const char *s, uint8_t v[3])
+{
+    if (*s == '#') s++;
+    if (strlen(s) != 6) return false;
+    for (int i = 0; i < 3; i++) {
+        int hi = hexval(s[2 * i]), lo = hexval(s[2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        v[i] = hi << 4 | lo;
+    }
+    return true;
+}
+
 static void cmd_color(int argc, char **argv)
 {
-    const char *s = argc == 2 ? argv[1] : "";
-    if (*s == '#') s++;
     uint8_t v[3];
-    bool ok = strlen(s) == 6;
-    for (int i = 0; ok && i < 3; i++) {
-        int hi = hexval(s[2 * i]), lo = hexval(s[2 * i + 1]);
-        if (hi < 0 || lo < 0) ok = false;
-        else v[i] = hi << 4 | lo;
-    }
-    if (!ok) { ESP_LOGW(TAG, "error color: expected RRGGBB"); return; }
+    if (!parse_rgb(argc == 2 ? argv[1] : "", v)) { ESP_LOGW(TAG, "error color: expected RRGGBB"); return; }
     config_set_color(v[0], v[1], v[2]);      // "cfg: color #rrggbb"
     mesh_set_color(v[0], v[1], v[2]);
     ESP_LOGI(TAG, "ok color #%02x%02x%02x", v[0], v[1], v[2]);   // the screens pick it up within 50 ms
+}
+
+// "color2 RRGGBB": the waves' colour B; "color2 auto": back to the opposite hue of the colour. Pure black is kept as
+// #010101 (the advert's 0, 0, 0 means automatic): the answer says which colour was set
+static void cmd_color2(int argc, char **argv)
+{
+    uint8_t v[3];
+    if (argc == 2 && !strcmp(argv[1], "auto")) {
+        config_clear_color2();               // "cfg: color2 auto"
+        mesh_set_color2(0, 0, 0, false);
+        ESP_LOGI(TAG, "ok color2 auto");
+        return;
+    }
+    if (!parse_rgb(argc == 2 ? argv[1] : "", v)) { ESP_LOGW(TAG, "error color2: expected RRGGBB or auto"); return; }
+    config_set_color2(v[0], v[1], v[2]);     // "cfg: color2 #rrggbb"
+    const app_cfg_t *c = config_get();
+    mesh_set_color2(c->b2_r, c->b2_g, c->b2_b, true);
+    ESP_LOGI(TAG, "ok color2 #%02x%02x%02x", c->b2_r, c->b2_g, c->b2_b);   // the ring's mark follows within 50 ms
 }
 
 static void cmd_devmode(int argc, char **argv)
@@ -138,12 +161,13 @@ static void cmd_cfg(int argc, char **argv)
 {
     EXT_RAM_BSS_ATTR static char js[1600];
     const app_cfg_t *c = config_get();
-    char name[40];
+    char name[40], c2[8] = "auto";
     json_str(name, sizeof(name), c->name);
+    if (c->b2_set) snprintf(c2, sizeof(c2), "#%02x%02x%02x", c->b2_r, c->b2_g, c->b2_b);
     int n = snprintf(js, sizeof(js),
-                     "{\"color\":\"#%02x%02x%02x\",\"dev\":%s,\"name\":\"%s\",\"bright\":%u,\"version\":\"%s\","
-                     "\"addr\":\"%s\",\"peers\":[",
-                     c->r, c->g, c->b, c->dev_mode ? "true" : "false", name, c->bright,
+                     "{\"color\":\"#%02x%02x%02x\",\"color2\":\"%s\",\"dev\":%s,\"name\":\"%s\",\"bright\":%u,"
+                     "\"version\":\"%s\",\"addr\":\"%s\",\"peers\":[",
+                     c->r, c->g, c->b, c2, c->dev_mode ? "true" : "false", name, c->bright,
                      esp_app_get_description()->version, mesh_own_addr());
     int np = mesh_peers(peers, 16);
     for (int i = 0; i < np && i < 16 && n < (int)sizeof(js) - 100; i++) {
@@ -318,6 +342,7 @@ static void cmd_shot(int argc, char **argv)
 void console_init(void)
 {
     testcon_register("color", "color RRGGBB", cmd_color);
+    testcon_register("color2", "color2 RRGGBB|auto", cmd_color2);
     testcon_register("devmode", "devmode on|off", cmd_devmode);
     testcon_register("name", "name TEXT", cmd_name);
     testcon_register("bright", "bright 0-100", cmd_bright);

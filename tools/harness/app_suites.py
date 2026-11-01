@@ -1,7 +1,7 @@
 """ColorMesh's own tests (main/: the pager's pick ring | main | system pages, the Bluetooth mesh through the console).
 Same registry (@test from board.py), same ctx as core_suites.py. The board has no network: every test goes through
-the USB console and the serial log (docs/PROTOCOL.md; the commands: color, devmode, name, bright, peers, cfg, hold,
-shot, plus forge_lvgl's screen / tap / press / swipe / drag and the board's fps).
+the USB console and the serial log (docs/PROTOCOL.md; the commands: color, color2, devmode, name, bright, peers, cfg,
+hold, shot, plus forge_lvgl's screen / tap / press / swipe / drag and the board's fps).
 
     APP_ORDER       the app's suites, run after the core start-up checks (harness.py)
     APP_WATCH       log lines that aren't failures but must not go unseen: (regex, what), counted per test
@@ -11,6 +11,7 @@ shot, plus forge_lvgl's screen / tap / press / swipe / drag and the board's fps)
 Screens (pick, main, system, message) are snapshotted by the core `screens` suite (Board.snap -> `shot` over USB,
 metrics snapshot_ms.<name>): not registered again here.
 """
+import math
 import re
 import time
 
@@ -33,6 +34,17 @@ RED_SWATCH = (SCREEN_C[0], SCREEN_C[1] - RING_R)       # hue 0 = red at the top,
 RED = '#ff0000'
 
 
+def swatch_at(i):
+    """The centre of swatch i (0 = red at the top, clockwise every 30 degrees), as ui.c places it."""
+    a = math.radians(i * 30)
+    return SCREEN_C[0] + round(RING_R * math.sin(a)), SCREEN_C[1] - round(RING_R * math.cos(a))
+
+
+GREEN_SWATCH = swatch_at(4)                            # 120 degrees: #00ff00, (389, 323)
+GREEN = '#00ff00'
+LONG_PRESS_MS = 800                                    # the console's still finger; LVGL's long press is 400 ms
+
+
 def go_home(ctx):
     ctx.board.show(HOME)
     ctx.board.wait_screen(HOME, 6)
@@ -49,6 +61,20 @@ def put_back_color(b, saved):
     """The colour the board had before a test set its own (the user's choice, kept in NVS)."""
     if saved and re.fullmatch(r'#[0-9a-fA-F]{6}', saved) and saved.lower() != RED:
         b.color(saved[1:])
+
+
+COLOR2_OK = r'test: ok color2 (#[0-9a-f]{6}|auto)'
+
+
+def set_color2(b, value):
+    """`color2 RRGGBB|auto` -> what the board says it set: '#rrggbb' or 'auto'."""
+    return b.cmd(f'color2 {value.lstrip("#")}', COLOR2_OK).group(1)
+
+
+def put_back_color2(b, saved, now):
+    """The wave colour the board had before a test (the user's choice, kept in NVS), unless it is that already."""
+    if saved and saved != now and (saved == 'auto' or re.fullmatch(r'#[0-9a-fA-F]{6}', saved)):
+        set_color2(b, saved)
 
 
 # ---------------------------------------------------------------- navigation
@@ -72,6 +98,45 @@ def pick_then_main(ctx):
     finally:
         put_back_color(b, saved)
     ctx.note(f'pick: a tap at {RED_SWATCH} set {RED} and opened {HOME}; the colour {saved} put back')
+
+
+@test('navigation')
+def pick_long_press(ctx):
+    """The pick ring: a long press (the console's still finger, LONG_PRESS_MS) on the green swatch makes green the
+    waves' colour B (`cfg: color2 #00ff00`, `cfg` agrees) without being a tap (no `cfg: color #`, the ring stays
+    shown); a second long press on it goes back to automatic (`cfg: color2 auto`). Both choices are put back."""
+    b = ctx.board
+    before = b.cfg()
+    saved2, colour = before.get('color2'), before.get('color')
+    check(saved2 is not None, '"cfg" has no "color2": a firmware without the wave colour')
+    now = saved2
+    try:
+        if saved2 != 'auto':
+            now = set_color2(b, 'auto')
+        b.show('pick')
+        b.wait_screen('pick', 6)
+        time.sleep(0.5)
+        at = len(ctx.log.lines())
+        b.press(*GREEN_SWATCH, LONG_PRESS_MS)
+        ctx.log.wait(r'cfg: color2 ' + GREEN, 3, 'the long press on the green swatch', start=at)
+        now = b.cfg().get('color2')
+        check(now == GREEN, f'after the long press on green, cfg says color2 {now}')
+        time.sleep(0.8)                                # a tap would have slid to main by now (~0.4 s)
+        shown = b.screen()
+        check(shown == 'pick', f'the long press also left the ring: the screen is {shown}')
+        at2 = len(ctx.log.lines())
+        b.press(*GREEN_SWATCH, LONG_PRESS_MS)
+        ctx.log.wait(r'cfg: color2 auto', 3, 'the second long press on green (back to automatic)', start=at2)
+        now = b.cfg().get('color2')
+        check(now == 'auto', f'after the second long press, cfg says color2 {now}')
+        taps = [l for l in ctx.log.lines()[at:] if re.search(r'cfg: color #', l)]
+        check(not taps, f'a long press counted as a tap too: {taps[0] if taps else ""}')
+        after = b.cfg().get('color')
+        check(after == colour, f'the long presses changed the colour: {colour} -> {after}')
+    finally:
+        put_back_color2(b, saved2, now)
+    ctx.note(f'pick: a long press at {GREEN_SWATCH} set color2 {GREEN}, a second one auto; the ring stayed, the '
+             f'colour {colour} kept; color2 {saved2} put back')
 
 
 @test('navigation')
@@ -243,6 +308,34 @@ def wave_tap(ctx):
     check(v['fps'] >= WAVE_FPS_MIN, f'wave at {v["fps"]:.1f} fps (at least {WAVE_FPS_MIN}): {m.string.strip()}')
     ctx.note(f'tap at the centre -> {ui.group(0)}; {v["frames"]} frames at {v["fps"]:.1f} fps, fill avg '
              f'{v["fill_avg"]:.1f} max {v["fill_max"]:.1f} ms, frame avg {v["frame_avg"]:.1f} max {v["frame_max"]:.1f} ms')
+
+
+@test('mesh')
+def color2(ctx):
+    """The waves' colour B over the console: `color2 00ff00` -> `test: ok color2 #00ff00` (log `cfg: color2
+    #00ff00`) and `cfg` says "color2":"#00ff00"; `color2 auto` -> `test: ok color2 auto` and `cfg` says "auto". The
+    user's choice is put back."""
+    b = ctx.board
+    saved = b.cfg().get('color2')
+    check(saved is not None, '"cfg" has no "color2": a firmware without the wave colour')
+    now = saved
+    try:
+        at = len(ctx.log.lines())
+        now = set_color2(b, '00ff00')
+        check(now == GREEN, f'"color2 00ff00" answered {now}')
+        ctx.log.wait(r'cfg: color2 ' + GREEN, 2, 'the config line of "color2 00ff00"', start=at)
+        c = b.cfg().get('color2')
+        check(c == GREEN, f'after "color2 00ff00", cfg says color2 {c}')
+        at = len(ctx.log.lines())
+        now = set_color2(b, 'auto')
+        check(now == 'auto', f'"color2 auto" answered {now}')
+        ctx.log.wait(r'cfg: color2 auto', 2, 'the config line of "color2 auto"', start=at)
+        c = b.cfg().get('color2')
+        now = c
+        check(c == 'auto', f'after "color2 auto", cfg says color2 {c}')
+    finally:
+        put_back_color2(b, saved, now)
+    ctx.note(f'color2 {GREEN} then auto, both in cfg; the wave colour {saved} put back')
 
 
 # ---------------------------------------------------------------- perf

@@ -1,5 +1,6 @@
 // The app's settings in NVS (see config.h)
 #include "config.h"
+#include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
 #include "nvs.h"
@@ -32,12 +33,21 @@ void config_load(void)
             cfg.g = rgb >> 8;
             cfg.b = rgb;
         }
+        if (nvs_get_u32(h, "rgb2", &rgb) == ESP_OK) {
+            cfg.b2_set = true;
+            cfg.b2_r = rgb >> 16;
+            cfg.b2_g = rgb >> 8;
+            cfg.b2_b = rgb;
+            if (!(cfg.b2_r | cfg.b2_g | cfg.b2_b)) cfg.b2_r = cfg.b2_g = cfg.b2_b = 1;
+        }
         if (nvs_get_u8(h, "dev", &u8) == ESP_OK) cfg.dev_mode = u8 != 0;
         if (nvs_get_str(h, "name", name, &n) == ESP_OK) strlcpy(cfg.name, name, sizeof(cfg.name));
         if (nvs_get_u8(h, "bright", &u8) == ESP_OK) cfg.bright = u8 > 100 ? 100 : u8;
         nvs_close(h);
     }
-    ESP_LOGI(TAG, "loaded: color #%02x%02x%02x, dev %s, name \"%s\", bright %u", cfg.r, cfg.g, cfg.b,
+    char c2[8] = "auto";
+    if (cfg.b2_set) snprintf(c2, sizeof(c2), "#%02x%02x%02x", cfg.b2_r, cfg.b2_g, cfg.b2_b);
+    ESP_LOGI(TAG, "loaded: color #%02x%02x%02x, color2 %s, dev %s, name \"%s\", bright %u", cfg.r, cfg.g, cfg.b, c2,
              cfg.dev_mode ? "on" : "off", cfg.name, cfg.bright);
     apply_bright();
 }
@@ -86,4 +96,28 @@ void config_set_bright(uint8_t pct)
     if (open_rw(&h)) commit_close(h, nvs_check(nvs_set_u8(h, "bright", cfg.bright), NS "/bright"));
     apply_bright();
     ESP_LOGI(TAG, "bright %u", cfg.bright);
+}
+
+void config_set_color2(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!(r | g | b)) r = g = b = 1;                     // 0,0,0 in the advert means automatic
+    cfg.b2_r = r;
+    cfg.b2_g = g;
+    cfg.b2_b = b;
+    cfg.b2_set = true;
+    nvs_handle_t h;
+    if (open_rw(&h)) commit_close(h, nvs_check(nvs_set_u32(h, "rgb2", (uint32_t)r << 16 | g << 8 | b), NS "/rgb2"));
+    ESP_LOGI(TAG, "color2 #%02x%02x%02x", r, g, b);
+}
+
+void config_clear_color2(void)
+{
+    cfg.b2_set = false;
+    cfg.b2_r = cfg.b2_g = cfg.b2_b = 0;
+    nvs_handle_t h;
+    if (open_rw(&h)) {
+        esp_err_t err = nvs_erase_key(h, "rgb2");
+        commit_close(h, err == ESP_ERR_NVS_NOT_FOUND || nvs_check(err, NS "/rgb2"));
+    }
+    ESP_LOGI(TAG, "color2 auto");
 }
