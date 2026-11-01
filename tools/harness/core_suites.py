@@ -2,6 +2,10 @@
 app. Each test is a function(ctx) that raises board.Fail on a failed check; ctx.metric() records numbers for the
 baseline, ctx.note() adds a line to the report, ctx.skip() says why a metric wasn't measured. Contract:
 docs/PROTOCOL.md; project values: forge.json (board.CFG). The app's own tests are in app_suites.py.
+
+No-net mode (forge.json "no_net", harness.py --no-net; ctx.board.no_net): the boot check reads `diag: firmware <ver>`
+and `diag: running from ota_N` instead of forge_ota's `ota: Running` line, the console check wants the app's commands
+and no `key` / `wifi`, screens come over the USB console (`shot`), and the network suites never run (harness.py).
 """
 import os
 import re
@@ -12,7 +16,11 @@ import urllib.request
 
 from board import CFG, ROOT, SETUP_IP, Fail, check, dns_query, http_get, kv, test
 import forgecfg
-import snapshot
+import shot
+try:
+    import snapshot  # tools/snapshot.py: HTTPS snapshots (a project on a network); a no-net project may not ship it
+except ImportError:
+    snapshot = None
 
 # Suites that only run when asked for (or with their flag): ota needs --ota
 ON_REQUEST = {'ota'}
@@ -37,9 +45,23 @@ def last_boot(lines):
 
 # ---------------------------------------------------------------- boot
 
+def boot_image(lines, no_net=False):
+    """(version, slot, channel) of the image that booted, from the start-up lines: forge_ota's `ota: Running <ver>
+    from <slot>, channel <ch>`; without a network (no forge_ota) `diag: firmware <ver>` + `diag: running from <slot>`
+    (channel None). None when the lines are not there."""
+    if not no_net:
+        m = next((re.search(r'ota: Running (\S+) from (\w+), channel (\w+)', l) for l in lines if 'ota: Running' in l),
+                 None)
+        return (m.group(1), m.group(2), m.group(3)) if m else None
+    fw = next((re.search(r'diag: firmware (\S+)', l) for l in lines if 'diag: firmware ' in l), None)
+    slot = next((re.search(r'diag: running from (\w+)', l) for l in lines if 'diag: running from ' in l), None)
+    return (fw.group(1), slot.group(1), None) if fw and slot else None
+
+
 @test('boot')
 def start_up(ctx):
-    """The last start-up in the log: the app version ESP-IDF prints, the ready line, no error lines, the OTA line."""
+    """The last start-up in the log: the app version ESP-IDF prints, the ready line, no error lines, the OTA line
+    (no-net: the diag firmware and slot lines)."""
     lines = last_boot(ctx.log.lines())
     if not lines:
         ctx.skip('boot_s.*', 'no start-up in this log window (it was reused): restart the board to measure it')
@@ -63,11 +85,14 @@ def start_up(ctx):
                      + (f', internal {mk.group(2)} KB free' if mk.group(2) else ''))
     errors = [l for l in lines if l.startswith('E (')]
     check(not errors, f'{len(errors)} error lines in the start-up, first: {errors[0][:120]}' if errors else '')
-    ota = next((re.search(r'ota: Running (\S+) from (\w+), channel (\w+)', l) for l in lines if 'ota: Running' in l), None)
-    check(ota, 'no "ota: Running <ver> from <slot>, channel <ch>" line in the start-up')
-    check(ota.group(1) == v, f'the OTA line says {ota.group(1)}, the console says {v}')
+    no_net = getattr(ctx.board, 'no_net', False)
+    img = boot_image(lines, no_net)
+    check(img, 'no "diag: firmware <ver>" + "diag: running from ota_N" lines in the start-up' if no_net else
+          'no "ota: Running <ver> from <slot>, channel <ch>" line in the start-up')
+    ver, slot, channel = img
+    check(ver == v, f'the {"diag firmware" if no_net else "OTA"} line says {ver}, the console says {v}')
     reset = next((l.split('diag: ', 1)[1] for l in lines if 'diag: boot ' in l), '')
-    ctx.note(f'{v} from {ota.group(2)}, channel {ota.group(3)}' + (f'; {reset}' if reset else ''))
+    ctx.note(f'{v} from {slot}' + (f', channel {channel}' if channel else '') + (f'; {reset}' if reset else ''))
     crash = next((l.split('diag: ', 1)[1] for l in lines if 'diag: coredump: last crash' in l), '')
     if crash:
         ctx.note(f'the board kept a crash from before this start-up: {crash[:140]}')
@@ -75,15 +100,35 @@ def start_up(ctx):
 
 # ---------------------------------------------------------------- console
 
+WANTED_CORE = ('ping', 'help', 'heap', 'where', 'reboot')            # forge_core
+WANTED_NET = ('key', 'wifi')                                         # forge_net (a board on a network)
+# ColorMesh's own (main/console.c): colour, dev mode, name, brightness, the peers, the whole configuration as JSON,
+# the simulated finger, a screen over USB. The twin projects keep WANTED_NET; this one has no network.
+WANTED_NO_NET = ('color', 'devmode', 'name', 'bright', 'peers', 'cfg', 'hold', 'shot')
+
+
+def wanted_commands(no_net=False):
+    """The console commands `help` must list."""
+    return WANTED_CORE + (WANTED_NO_NET if no_net else WANTED_NET)
+
+
+def unwanted_commands(no_net=False):
+    """Commands `help` must not list: a no-net firmware has no key and no Wi-Fi."""
+    return WANTED_NET if no_net else ()
+
+
 @test('console')
 def commands(ctx):
-    """ping, help, heap and where answer in the expected format (PROTOCOL.md §2)."""
+    """ping, help, heap and where answer in the expected format (PROTOCOL.md §2); help lists the expected commands."""
     b = ctx.board
+    no_net = getattr(b, 'no_net', False)
     v = b.version()
     names = b.cmd('help', r'test: commands: (.*)').group(1)
     have = {c.strip().split(' ')[0] for c in names.split(',')}
-    for want in ('ping', 'help', 'heap', 'where', 'reboot', 'key', 'wifi'):    # forge_core and forge_net
+    for want in wanted_commands(no_net):
         check(want in have, f'"help" does not list "{want}" ({names[:200]})')
+    for bad in unwanted_commands(no_net):
+        check(bad not in have, f'"help" lists "{bad}": this project has no network ({names[:200]})')
     ui = [c for c in ('screen', 'tap', 'press', 'swipe', 'drag', 'fps') if c not in have]
     if ui:
         ctx.note('no display commands: ' + ', '.join(ui) + ' (a firmware without forge_lvgl?)')
@@ -106,10 +151,17 @@ def shot_over_usb(ctx):
     """`shot SCREEN [DIV]` (v0.6.0): a screen rendered off-display and sent over the USB console as base64 RGB565 rows,
     for a session that can't reach the board's HTTPS (tools/snapshot.py) and for screens before Wi-Fi;
     tools/devloop/shot.py turns a log into PNGs. Fails on the old firmware: no such command."""
-    import shot
     b = ctx.board
-    at = len(ctx.log.lines())
     name = (CFG['screens'] or ['current'])[0]
+    if getattr(b, 'no_net', False):                    # the harness's own path (Board.snap -> shot): SHOTEND, no reply needed
+        s = b.snap(name, ctx.out(f'shot_{name}.png'), div=4)
+        check(s.w == CFG['screen']['w'] // 4, f'{s.w}x{s.h} decoded, a quarter of the screen expected')
+        lit = sum(1 for i in range(0, len(s.rgb), 3) if s.rgb[i] + s.rgb[i + 1] + s.rgb[i + 2] > 60)
+        check(s.rows == s.h and lit > s.w * s.h // 100,
+              f'{s.rows} of {s.h} rows, {lit} lit pixels of {s.w * s.h}: a broken or blank picture')
+        ctx.note(f'shot {name} 4: {s.w}x{s.h} over USB in {s.ms} ms, {s.rows} rows, {lit} lit pixels (shot_{name}.png)')
+        return
+    at = len(ctx.log.lines())
     m = b.cmd(f'shot {name} 4', r'test: ok shot (\S+) (\d+)x(\d+)', timeout=30)
     ctx.log.wait(r'^SHOTEND', 5, 'the end of the shot', start=at)
     got = list(shot.blocks(ctx.log.lines()[at:]))
@@ -128,6 +180,9 @@ def wifi_low_latency(ctx):
     """net_low_latency() (v0.6.0): Wi-Fi power save off while a screen wants fast requests (ESP-IDF's default costs
     ~100 ms a request, MeteoBus's radar), counted; `wifi status` shows ps, lowlat, the download slot and queued jobs."""
     b = ctx.board
+    if getattr(b, 'no_net', False):
+        ctx.note('no network in this project: wifi lowlat not checked')
+        return
     w = b.wifi()
     check('ps' in w and 'lowlat' in w and 'dl' in w and 'bg' in w, f'wifi status lacks ps/lowlat/dl/bg: {w}')
     check(w['ps'] == 'min' and w['lowlat'] == '0', f'at rest: ps={w["ps"]} lowlat={w["lowlat"]}, expected min / 0')
@@ -211,6 +266,15 @@ def every_screen(ctx):
             b.show(name)
             b.wait_screen(name, 6)
             time.sleep(0.5)
+        if getattr(b, 'no_net', False):              # over the USB console: every 2nd pixel (Board.snap -> shot)
+            s = b.snap(name, ctx.out(f'screen_{name}.png'))
+            ctx.snapped.add(name)
+            ctx.metric(f'snapshot_ms.{name}', s.ms)
+            check((s.w, s.h) == (CFG['screen']['w'] // 2, CFG['screen']['h'] // 2),
+                  f'shot of {name} is {s.w}x{s.h}, half of forge.json\'s {CFG["screen"]["w"]}x{CFG["screen"]["h"]} expected')
+            check(s.rows == s.h, f'shot of {name}: {s.rows} of {s.h} rows arrived')
+            check(shot.distinct_colors(s.rgb, s.w, s.h) > 1, f'the shot of {name} is blank (one colour)')
+            continue
         ms, bmp = b.snap(name, ctx.out(f'screen_{name}.png'))
         ctx.snapped.add(name)
         ctx.metric(f'snapshot_ms.{name}', round(ms))

@@ -29,6 +29,9 @@ DEFAULTS = {
     'notes_max_bytes': 20000,
     'repo': '',
     'ota_site': '',
+    # True: no Wi-Fi at all. The tools use the USB console only; the harness waits for no IP, skips the network
+    # suites and snapshots through the console's `shot` (tools/shot.py)
+    'no_net': False,
 }
 
 

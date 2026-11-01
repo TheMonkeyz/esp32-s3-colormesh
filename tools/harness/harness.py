@@ -8,12 +8,16 @@
     python tools/harness/harness.py wifi_setup --phone   # also the Easy Connect phone step (asks you)
     python tools/harness/harness.py --update-baseline    # propose the measured numbers as the new reference
     python tools/harness/harness.py --ota v1.2.0-rc.1    # install a published release with the display's updater, test it
+    python tools/harness/harness.py --no-net             # a board without Wi-Fi: console only (forge.json "no_net" too)
 
 Generic suites: core_suites.py; the app's own: app_suites.py. Needs the flash helper (Windows: tools/devloop/
 start_flash_helper.bat; macOS / Linux: python tools/devloop/flash_helper.py, docs/MACOS.md) and firmware with the
 test console. wifi_setup joins the PC's Wi-Fi card to the display's setup network (Ethernet keeps the PC online):
 Windows only, left out of the default run elsewhere. Exit code 0 = all passed, no performance problem.
 Report: tools/harness/reports/<date-time>/report.md (+ screenshots, results.json, the log of each failed test).
+
+No-net mode (forge.json "no_net": true, or --no-net): no IP is waited for or needed, the network suites (web, update,
+wifi_runtime, wifi_setup, ota) never run, and screens are taken over the USB console (`shot`, tools/shot.py).
 """
 import argparse
 import fnmatch
@@ -28,6 +32,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from board import CFG, DEV, ROOT, SUITES, Board, Fail, Log, PCWifi  # noqa: E402
+import board as board_mod  # noqa: E402
 import core_suites  # noqa: E402,F401  (registers the generic suites)
 # A network name with emoji (a phone shared one over Easy Connect) crashed print() on the Windows console's code page
 for _stream in (sys.stdout, sys.stderr):
@@ -39,6 +44,9 @@ import app_suites  # noqa: E402  (registers the app's suites)
 
 ORDER = (['boot', 'console', 'memory', 'screens'] + app_suites.APP_ORDER
          + ['web', 'update', 'idle_stable', 'wifi_runtime', 'wifi_setup', 'ota'])
+# Suites that need the board on a network: never run in no-net mode (forge.json "no_net" or --no-net)
+NET_SUITES = {'web', 'update', 'wifi_runtime', 'wifi_setup', 'ota'}
+NO_NET = board_mod.NO_NET
 # wifi_setup joins the computer's Wi-Fi to the display's setup network (netsh, Ethernet keeping the PC online):
 # Windows only, left out of the default run elsewhere (a MacBook would lose the display and the internet)
 WINDOWS = os.name == 'nt'
@@ -211,22 +219,33 @@ def parse_args(argv=None):
     ap.add_argument('--ota', metavar='VERSION', help="install this published release with the display's own updater "
                     'first (waits until its channel offers it), then test it (implies --expect and the ota suite)')
     ap.add_argument('--ota-wait', type=int, default=20, help='--ota: minutes to wait for the channel to offer it')
+    ap.add_argument('--no-net', action='store_true', help='the board has no network: no IP, snapshots over the USB '
+                    'console, the network suites left out (forge.json "no_net": true sets it for the project)')
     opts = ap.parse_args(argv)
+    opts.no_net = opts.no_net or NO_NET
+    if opts.no_net:
+        for flag, what in (('ip', '--ip'), ('ota', '--ota')):
+            if getattr(opts, flag):
+                ap.error(f'{what}: this project has no network (forge.json no_net / --no-net)')
     if opts.ota and not opts.expect:
         opts.expect = opts.ota
     if opts.flash in SUITES:                           # "--flash boot": boot is a suite, not a build folder
         opts.suites.insert(0, opts.flash)
         opts.flash = CFG['build_dir']
     asked = opts.suites + [s.strip() for x in opts.suite for s in x.split(',') if s.strip()]
+    known = [x for x in ORDER if x in SUITES and not (opts.no_net and x in NET_SUITES)]
     for s in asked:
         if s not in SUITES:
-            ap.error(f'unknown suite {s} (known: {", ".join(x for x in ORDER if x in SUITES)})')
+            ap.error(f'unknown suite {s} (known: {", ".join(known)})')
+        if opts.no_net and s in NET_SUITES:
+            ap.error(f'{s} needs the network: this project has none (forge.json no_net / --no-net)')
     if 'ota' in asked and not opts.ota:
         ap.error('the ota suite needs --ota VERSION')
     opts.run = asked or [s for s in ORDER if (s not in core_suites.ON_REQUEST or (s == 'ota' and opts.ota))
-                         and (WINDOWS or s != 'wifi_setup') and not (opts.quick and s in core_suites.QUICK_SKIP)]
+                         and (WINDOWS or s != 'wifi_setup') and not (opts.quick and s in core_suites.QUICK_SKIP)
+                         and not (opts.no_net and s in NET_SUITES)]
     core_suites.QUICK = opts.quick
-    if not asked and not WINDOWS:
+    if not asked and not WINDOWS and not opts.no_net:
         print('(wifi_setup left out: it needs the Windows PC, docs/MACOS.md)', flush=True)
     return opts
 
@@ -245,7 +264,7 @@ def main(argv=None):
     outdir = os.path.join(HERE, 'reports', time.strftime('%Y-%m-%d_%H%M%S'))
     os.makedirs(outdir, exist_ok=True)
     log = Log()
-    board = Board(opts.ip or find_ip(log) or '', log)
+    board = Board('' if opts.no_net else (opts.ip or find_ip(log) or ''), log, no_net=opts.no_net)
     ctx = Ctx(board, log, PCWifi(), outdir, opts)
     results = []
     started = time.time()
@@ -278,19 +297,21 @@ def main(argv=None):
             version = board.version()
         if opts.expect and version != opts.expect:
             raise Fail(f'the board runs {version}, not {opts.expect}')
-        if not opts.ip:
+        if not opts.no_net and not opts.ip:
             board.ip = find_ip(log) or board.ip
-        if not board.ip:
+        if not opts.no_net and not board.ip:
             raise Fail('the display\'s address is not in the log yet: pass --ip')
         mode = flash_mode(log.lines())
-        print(f'Testing {version} at {board.ip} (flash {mode})', flush=True)
+        print(f'Testing {version} ' + ('over the USB console' if opts.no_net else f'at {board.ip}')
+              + f' (flash {mode})', flush=True)
         if mode == 'DIO':
             ctx.note('flash mode DIO: times are held to the baseline\'s "dio" limits where it has them')
     except Fail as e:
         print('Cannot start:', e)
         return 2
     ctx.version = version
-    open(os.path.join(DEV, 'ip'), 'w').write(board.ip)
+    if not opts.no_net:
+        open(os.path.join(DEV, 'ip'), 'w').write(board.ip)
 
     watch = CORE_WATCH + app_suites.APP_WATCH
     for s in [x for x in ORDER if x in suites] + [x for x in suites if x not in ORDER]:

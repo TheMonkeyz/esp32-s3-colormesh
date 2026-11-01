@@ -192,6 +192,11 @@ class Build(TempProject):
         self.assertFalse(os.path.exists(self.manifest + '.forge_local'))
 
     def test_nothing_to_do_in_espforge_itself(self):
+        # Only in espforge itself: this runs main() on the repository's own manifest. In an app made from the
+        # template that manifest has espforge entries, and the run would override the real file for a fake build
+        # (seen in esp32-s3-colormesh, 2026-10-31); the copies case above covers the logic there.
+        if forge_local.forge_entries(forge_local.manifest_entries(read(os.path.join(ESPFORGE, 'main', 'idf_component.yml')))):
+            self.skipTest('an app built from espforge (its manifest has espforge entries): test_nothing_to_do_with_copies covers it')
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = forge_local.main(['--idf', self.idf], root=ESPFORGE)
@@ -259,6 +264,8 @@ class FetchForge(unittest.TestCase):
         self.assertEqual(out, self.root.replace('\\', '/') + '/components', 'the checkout\'s own components folder')
 
     def test_nothing_to_do_in_espforge_itself(self):
+        if fetch_forge.forge_entries(fetch_forge.manifest_entries(read(os.path.join(ESPFORGE, 'main', 'idf_component.yml')))):
+            self.skipTest('an app built from espforge (its manifest has espforge entries): test_nothing_to_do_with_copies covers it')
         code, out, err = self.run_fetch(root=ESPFORGE)
         self.assertEqual(code, 0)
         self.assertIn('nothing to do', err)

@@ -37,3 +37,6 @@ version.txt
 
 # espforge at the pinned tag, in an app that takes the framework at a tag (tools/fetch_forge.py)
 .espforge/
+
+# Component-manager side file written by a build outside the build dir
+idf_seen.json

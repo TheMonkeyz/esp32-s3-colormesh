@@ -21,7 +21,8 @@ Details: `docs/WORKFLOW.md`, `docs/RELEASING.md`. Skills in `.claude/skills/` ho
 
 - **Stage parts under unique names and compare md5 before flashing** (`tools/devloop/stage.py`). A reused path has
   delivered a stale file (L1).
-- **Check `ota: Running <ver> from ota_N` in a fresh log before testing** (L2).
+- **Check `diag: firmware <ver>` and `diag: running from ota_N` in a fresh log before testing** (L2; this app
+  links no forge_ota, so there is no `ota: Running` line).
 - **Label test builds above the current release**; delete `version.txt` when done (L9, L10).
 - **Build exactly what you commit.** Set later work aside with `git stash push -u`, build, commit, `git stash pop`
   (L14).
@@ -32,7 +33,6 @@ Details: `docs/WORKFLOW.md`, `docs/RELEASING.md`. Skills in `.claude/skills/` ho
 - **Never take over the user's screen.** Ask first; prefer the flash helper (L43).
 - **Relay `>>> ASK THE USER` from the harness at once** (L44).
 - **Every fix gets a test that fails on the old code** (harness, Playwright or host test) (L57).
-- **Reset cached board facts (`.devloop/ip`, `.devloop/key`) after a flash or an install** (L7).
 - **Never restart a board in the first 60 s after an update** (it rolls back) (L23).
 - **Report what the log shows**, not what a message suggests (L46).
 - **Backlog** (the user's rule, 2026-10-07, for esp32-s3-rtcquebec, weather_amoled and espforge): when a
@@ -44,53 +44,36 @@ Details: `docs/WORKFLOW.md`, `docs/RELEASING.md`. Skills in `.claude/skills/` ho
 Lessons by topic (memory, LVGL, touch, Wi-Fi, OTA, Windows tooling…): `docs/LESSONS.md`. Add a lesson there when a
 bug teaches something general; add the project-specific fact below.
 
-## Shared with weather_amoled
-
-[weather_amoled](https://github.com/TheMonkeyz/esp32-s3-weather) (`C:\Users\lmathieu\ESPDEV\weather_amoled`) is the
-app espforge was extracted from (October 4). Since its v1.14.0 it **uses forge_core, forge_net, forge_ota and
-dns_server at an espforge release tag** (its `main/idf_component.yml`); it keeps its own display, touch, slide.c and
-app code (forge_lvgl and the board are not used there).
-
-- **Before tagging an espforge release that changes those components**, build weather_amoled against this checkout
-  (`python tools/forge_local.py` there: a temporary `override_path`, nothing committed) and run its harness; then tag
-  here, and bump the four tags in its manifest. Keep components generic: app texts, names and languages come in
-  through the hooks (i18n descriptors, `svc_set_why_text`, `ota_set_err_text`, Kconfig `FORGE_*`).
-- **Still twins** (same code in both, not shared): forge_lvgl's `lvgl_mem.c` and `pager.c`, the board's `display.c`,
-  `touch.c`, `imu.c`, the harness's `board.py` / `harness.py` and the flash helper (espforge's
-  `tools/devloop/flash_helper.py` is weather_amoled's `tools/flash_helper.py` with `.devloop/` and forge.json; the
-  PowerShell helpers restart through the console too since October 6). The browser emulator: its
-  `web/emu/emu_*.c` are the originals of espforge's `web/emu/forge/` (generic since October 7; weather_amoled
-  still has its own copy, with its audio, motion and partition stand-ins). A fix in one gets ported, or a
-  task for the other. Its `slide.c` is the larger original: port ideas, not the file.
-
 ## Working setup (this PC)
 
-- **Board:** Waveshare ESP32-S3-Touch-AMOLED-1.75 on **COM5** of a Windows 11 PC (`forge.json` `port` empty = auto).
+- **No Wi-Fi at all.** Bluetooth LE between the boards (NimBLE, `docs/RESEARCH-BLE.md`); configuration and updates
+  over USB serial (the Pages site, the test console) or, in dev mode, from a peer over Bluetooth. forge_net is linked
+  only because forge_lvgl requires it; it is never started. So: no IP, no key, no HTTPS snapshots (`forge.json`
+  `no_net`); the harness runs with `--no-net`.
+- **Boards:** three Waveshare ESP32-S3-Touch-AMOLED-1.75 on a Windows 11 PC. Board A is on **COM5** (`forge.json`
+  `port` empty = auto); the others get one-shot flashes (`flash_helper.py flash 60 --port COMx` while the helper is
+  stopped) or the Pages flasher.
 - **ESP-IDF v5.5.4** at `C:\Espressif\esp-idf` (CI uses the same version, from `forge.json` `idf`). In PowerShell:
   `. C:\Espressif\esp-idf\export.ps1`, then
-  `idf.py -B build\v55 -D SDKCONFIG=build\v55\sdkconfig build`.
+  `idf.py -B build\v55 -D SDKCONFIG=build\v55\sdkconfig build`. The framework comes from espforge at a tag
+  (`main/idf_component.yml`, v0.5.0); delete `dependencies.lock` when bumping it. From the Claude desktop app's
+  shells, `%LOCALAPPDATA%` is redirected into the app's package folder and the component manager's git fetch fails
+  ("'git init --bare' failed ... unable to get current working directory"): set
+  `$env:IDF_COMPONENT_CACHE_PATH = "<checkout>\build\v55\cm_cache"` in that shell before `idf.py`.
+- **Flashing:** Claude starts the flash helper itself, in the background (`run_in_background`:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File tools\devloop\flash_helper.ps1`), so no window opens on the
+  user's screen (user's rule, 2026-10-06); restart it the same way after editing `flash_helper.ps1` (L6). Then
+  `python tools\devloop\devloop.py flash 90 --build build\v55` (stages under unique names with md5 checks, flashes,
+  logs to `.devloop\serial_log.txt`), wait for `.devloop\flash.done`; during the log window
+  `python tools\devloop\devloop.py send "ping"` (test console). Check that `.devloop\flash_log.txt` names COM5.
+- **Board lock** (several agents share the board): before a flash, create `.devloop\board.lock` holding your name,
+  only if it does not exist (else wait 30 s and retry, up to 15 min); delete it when your log window ends.
+- **Other projects' helpers** run on this PC too (esp32-s3-meteobus: `flash_helper.ps1`, `p4\flash_helper_p4.ps1`).
+  An idle helper does not hold the port, but one flashing does: check their `flash.status` is `idle` before flashing.
 - **GitHub CLI** signed in as TheMonkeyz; not on the PATH of older shells: Git Bash
   `"/c/Program Files/GitHub CLI/gh.exe"`, PowerShell `& "C:\Program Files\GitHub CLI\gh.exe"`.
-- **Browser emulator** (`web/emu`): Emscripten 6.0.11 in WSL at `~/emsdk`;
-  `wsl bash -lc 'source ~/emsdk/emsdk_env.sh && make -C /mnt/c/<checkout>/web/emu -j8'` (LVGL from
-  `managed_components` after an idf.py build; ~1 min from scratch, 5 s with nothing to do), then
-  `node web/emu/forge/smoke.js`.
 - **Host tests** run in WSL (Ubuntu): `wsl make -C tests/host`. **Harness + flash helper unit tests** need pyserial:
-  `~/.espressif/python_env/idf5.5_py3.12_env/Scripts/python.exe -m unittest discover -s tools/harness -p "test_*.py"`
-  (plain Python skips the helper's). **Settings page tests**: `cd tools/webtest && npm test`
-  (Node in `C:\Program Files\nodejs`).
-- **Two ways to work:**
-  1. **Claude Code on the PC** (preferred): builds, `idf.py`, the harness and `gh` run directly. The flash helper
-     still owns the COM port while it is logging; the harness talks to it. **Claude starts the helper itself, in the
-     background** (`run_in_background`: `powershell -NoProfile -ExecutionPolicy Bypass -File tools\devloop\flash_helper.ps1`), so no window
-     opens on the user's screen (user's rule, 2026-10-06, as weather_amoled does); restart it the same way after
-     editing `flash_helper.ps1` (L6). `start_flash_helper.bat` (a window) only when the user asks for one.
-  2. **Claude desktop app / cloud**: builds run in a cloud container, the shell has **no USB** and can't type into
-     Windows terminals. The user starts `tools\devloop\start_flash_helper.bat` once; Claude stages the parts, runs
-     `python tools/devloop/devloop.py flash 120` (or writes `.devloop/flash.request`), waits for
-     `.devloop/flash.done` and reads `.devloop/serial_log.txt`. The cloud can't reach the board's IP: no
-     snapshots, no harness. Cloud build recipe: `docs/WORKFLOW.md`.
-- The display's IP is in the log (`web: Settings page: https://<ip>/`); its key comes from the console (`key`).
+  `~/.espressif/python_env/idf5.5_py3.12_env/Scripts/python.exe -m unittest discover -s tools/harness -p "test_*.py"`.
 
 ## How the user likes to work
 
@@ -100,8 +83,9 @@ app code (forge_lvgl and the board are not used there).
 - New features → minor version bump.
 - **French = Canadian French (Québec), standard written:** no anglicisms, no slang; **1er** for the first of the
   month; check grammar agreement when a noun changes.
-- New display text goes in `main/i18n_strings.h` (`X(T_ID, "English", "Français")`), never a bare literal on screen;
-  page text goes in `I18N` in `main/web/index.html`. Check French in snapshots: it is longer and wraps.
+- New display text goes in `main/i18n_strings.h` (`X(T_ID, "English", "Français")`), never a bare literal on screen.
+  The device has no web page (the Pages site is the configuration UI). Check French in snapshots: it is longer and
+  wraps.
 
 ## Bugs hit, and their fixes
 
