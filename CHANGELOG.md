@@ -5,7 +5,7 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
-## Unreleased (feature/page-order) - 2026-11-01
+## v0.8.0-rc.1 - 2026-11-01
 - New page order, left to right: colour choice, the mesh, voice and calls, rock paper scissors, system.
 - The colour choice, voice and game pages show the mesh behind them: the mixed colour while someone holds, and the
   waves, smooth (about 50 frames a second) and without tearing; the waves keep moving while you swipe.
