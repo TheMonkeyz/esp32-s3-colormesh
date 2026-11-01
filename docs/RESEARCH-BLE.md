@@ -102,7 +102,7 @@ The controller allocates everything from `MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA` 
 | `CONFIG_BT_NIMBLE_EXT_ADV` | n | Legacy API; 31 bytes suffice; ext adv is the growth step |
 | `CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT`, `CONFIG_BT_NIMBLE_LL_CFG_FEAT_LE_2M_PHY` | y (defaults) | 2M PHY request during the transfer |
 | `CONFIG_BT_NIMBLE_SECURITY_ENABLE`, `CONFIG_BT_NIMBLE_HS_PVCY` | n | No pairing, no RPA; removes SMP and privacy code |
-| `CONFIG_BT_NIMBLE_HOST_QUEUE_CONG_CHECK` | y | Protects controller memory when scanning without duplicate filtering |
+| `CONFIG_BT_NIMBLE_HOST_QUEUE_CONG_CHECK` | **n** (corrected on the board, 2026-10-31) | The report recommended y. Measured: with it on, the host passes each address once per ~200 reports (`ble_hs_hci_evt.c`, `ble_check_adv_list`, list of 50 addresses refreshed every 200 events), so a peer advertising 50 times a second was heard once every 2.7 s. Off; the controller's report flow control is the memory guard |
 | `CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM` | 200 | 35 B each; doubles the silent-discard headroom |
 | `CONFIG_BT_CTRL_SCAN_DUPL_TYPE_DATA_DEVICE` | y | Keeps the `filter_duplicates = 1` optimisation available later |
 | `CONFIG_BT_NIMBLE_HOST_ALLOW_CONNECT_WITH_SCAN` | n | #15258; cancel the scan around `ble_gap_connect()` instead |

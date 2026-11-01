@@ -103,10 +103,22 @@ Stack sizes: fill from the `diag: tasks:` high-water marks of the first good bui
 
 ### Radio measurements (the report's risks)
 
-Fill from the first builds on three boards: `ble_gap_adv_start()`'s return code at 20 ms non-connectable (risk 1);
-reports per peer per second against the 50/s sent and `seq` gaps at 100 ms and 50 ms scan windows (risk 2, go if
-≥ 75 %); callback duration, queue high-water mark, heap (risk 3); `idf.py size` and `heap` after host sync (risk 7,
-go if ≥ 30 KB internal headroom); the transfer rate with LVGL running (risk 5, go if ≥ 40 KB/s).
+Measured on board A alone, 2026-10-31 (v0.1.0-rc.0 test builds):
+
+- Risk 1: `ble_gap_adv_start()` at 0x20 (20 ms), non-connectable, returns 0; `where` shows `ble_adv=32`. No fallback.
+- Risk 2: the first build heard neighbours only in bursts (3-4 reports/s, each device once every 2.7 s). Cause:
+  `CONFIG_BT_NIMBLE_HOST_QUEUE_CONG_CHECK=y` (the research report's table recommended it) makes the host pass each
+  address once per ~200 reports (`ble_hs_hci_evt.c`, `ble_check_adv_list`). With it off: 71-75 reports/s from ~13
+  neighbours at a 100/100 ms scan; the strongest steady neighbour (-51 dBm) is heard 17.4 times/s, one report every
+  ~57 ms, largest gap 163 ms, no multi-second hole. The true per-event percentage needs a second ColorMesh board
+  (it sends exactly 50/s): fill in after the three-board test.
+- Risk 3: at ~75 reports/s the report queue never holds more than 1 of 32, the GAP callback takes at most 67 us,
+  drops 0 (`where`: `ble_q=1/32 ble_cb=67us ble_drop=0`).
+- Risk 7: `heap` after host sync: internal 149 KB free, largest block 78 KB, PSRAM 5552 KB; app .bin 1,091,024 bytes
+  (3 MB slot). NimBLE host pools stay in internal RAM (`MEM_ALLOC_MODE_INTERNAL`).
+- Hold to mix on the own board: `mesh: hold on` to `mesh: mix` 1-2 ms; release 20 ms.
+- Risk 5 (transfer rate with LVGL running): measured with the two-board firmware pull (see HISTORY once done).
+
 
 ## Display pipeline
 

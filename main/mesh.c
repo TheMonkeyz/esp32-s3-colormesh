@@ -29,7 +29,7 @@ static const char *TAG = "mesh";
 static const char *TAG_BLE = "ble";
 
 #define MESH_Q_LEN      32
-#define OTHER_Q_LEN     8
+#define OTHER_Q_LEN     32
 #define ADV_ITVL_FAST   0x20            // 20 ms, the NimBLE floor without CONFIG_BT_NIMBLE_HIGH_DUTY_ADV_ITVL
 #define ADV_ITVL_SLOW   0xA0            // 100 ms: the fallback if the controller refuses 20 ms (risk 1)
 #define SCAN_ITVL       0xA0            // 100 ms window = interval: continuous
@@ -75,6 +75,7 @@ static uint8_t seq;                     // mesh task only
 static volatile bool adv_on, scan_on, adv_fallback;
 static volatile uint16_t adv_itvl;
 static int64_t adv_retry_us, scan_retry_us;
+static uint16_t scan_itvl = SCAN_ITVL, scan_window = SCAN_WINDOW;
 
 // counters: written by the host task (callback) and the mesh task, read anywhere
 static volatile uint32_t n_reports, n_cm, n_drops;
@@ -205,7 +206,7 @@ static void adv_stop_locked(void)
 
 static void scan_start_locked(void)
 {
-    struct ble_gap_disc_params p = { .itvl = SCAN_ITVL, .window = SCAN_WINDOW, .filter_policy = 0, .limited = 0,
+    struct ble_gap_disc_params p = { .itvl = scan_itvl, .window = scan_window, .filter_policy = 0, .limited = 0,
                                      .passive = 1, .filter_duplicates = 0 };
     int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &p, gap_event, NULL);
     if (rc && rc != BLE_HS_EALREADY) {
@@ -214,7 +215,7 @@ static void scan_start_locked(void)
         return;
     }
     scan_on = true;
-    ESP_LOGI(TAG_BLE, "scanning %u/%u ms", SCAN_WINDOW * 5u / 8u, SCAN_ITVL * 5u / 8u);
+    ESP_LOGI(TAG_BLE, "scanning %u/%u ms", scan_window * 5u / 8u, scan_itvl * 5u / 8u);
 }
 
 static void scan_stop_locked(void)
