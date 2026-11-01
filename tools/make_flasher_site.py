@@ -11,16 +11,16 @@ Two steps, used by CI (.github/workflows/firmware.yml) and for local previews:
   2. site: assemble the web flasher from one or two release folders
        python3 tools/make_flasher_site.py site [--stable dist] [--beta dist-beta] [--out _site]
      -> web/flash/* + stable/ (and beta/) each with its images and an ESP Web Tools manifest.json,
-        channels.json, which the page reads to show the Stable / Beta picker and the display's updater reads
-        (docs/PROTOCOL.md §5), notes.json, the release notes from CHANGELOG.md, which the display shows before
-        installing an update (and the page shows for the selected version), and site.json ({app, repo} from
-        forge.json) for the page's title and links. fonts/ gets main/montserrat.ttf and its license when the
+        channels.json, which the page reads to show the Stable / Beta picker (docs/PROTOCOL.md §5), notes.json,
+        the release notes from CHANGELOG.md, which the page shows for the selected version, and site.json ({app,
+        repo} from forge.json) for the page's title and links. config.js (the "Configure over USB" card) comes
+        with the folder. fonts/ gets main/montserrat.ttf and its license when the
         project has them (optional). With --emu <dir>, try/ gets a browser build of the firmware (web/emu/build's
         files: index.html, emu.js, emu.wasm, emu-page.js, and the settings page with emu-settings.js; not its
         folders) and channels.json says so ("try"): the page links to it.
 
 The images stay separate parts on purpose: a single merged image would also overwrite the NVS
-partition (Wi-Fi credentials, settings, the TLS certificate) with 0xFF on every update.
+partition (the saved colour, name, dev mode and brightness) with 0xFF on every update.
 
 Local preview (Web Serial works on localhost):
   python3 tools/make_flasher_site.py dist && python3 tools/make_flasher_site.py site --stable dist

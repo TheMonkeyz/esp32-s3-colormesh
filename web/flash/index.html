@@ -6,7 +6,8 @@
 <title>Firmware installer</title>
 <!-- The web flasher (tools/make_flasher_site.py site): ESP Web Tools installs the parts listed in
      <channel>/manifest.json over Web Serial (Chrome / Edge on a computer). channels.json, notes.json and site.json
-     are written next to this page by the same script. -->
+     are written next to this page by the same script. config.js (same folder) drives the "Configure over USB"
+     card through the firmware's USB console. -->
 <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 <style>
   :root { --bg: #f6f7f9; --card: #fff; --fg: #1d2330; --muted: #5d6675; --line: #dde1e7; --accent: #2563eb;
@@ -21,6 +22,7 @@
   body.font { font-family: "Montserrat", system-ui, sans-serif; }
   main { max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }
   h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 0 0 12px; }
   .sub { color: var(--muted); margin: 0 0 24px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
   .channels { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -29,9 +31,11 @@
   .channels button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .channels button:disabled { opacity: .45; cursor: not-allowed; }
   .channels small { display: block; color: var(--muted); }
-  esp-web-install-button button[slot="activate"] { background: var(--accent); color: var(--accent-fg); border: 0;
+  esp-web-install-button button[slot="activate"], .btn { background: var(--accent); color: var(--accent-fg); border: 0;
     border-radius: 8px; padding: 12px 20px; font: inherit; font-weight: 600; cursor: pointer; }
-  .unsupported, .not-allowed { color: var(--warn); }
+  .btn.quiet { background: transparent; color: var(--fg); border: 1px solid var(--line); font-weight: normal; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .unsupported, .not-allowed, .warn { color: var(--warn); }
   .notes h3 { font-size: 1rem; margin: 16px 0 4px; }
   .notes h3:first-child { margin-top: 0; }
   .notes ul { margin: 0; padding-left: 20px; }
@@ -39,6 +43,28 @@
   .muted { color: var(--muted); }
   a { color: var(--accent); }
   footer { color: var(--muted); font-size: .9rem; margin-top: 24px; }
+  /* Configure over USB */
+  details.card > summary { cursor: pointer; font-size: 1.1rem; font-weight: 600; }
+  details.card[open] > summary { margin-bottom: 12px; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .row label { min-width: 110px; }
+  .row input[type="text"] { flex: 1; min-width: 160px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+                            background: transparent; color: var(--fg); font: inherit; }
+  .row input[type="range"] { flex: 1; min-width: 160px; }
+  .row input[type="color"] { width: 48px; height: 36px; padding: 0; border: 1px solid var(--line); border-radius: 8px;
+                             background: transparent; cursor: pointer; }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; }
+  .swatch[aria-pressed="true"] { border-color: var(--fg); }
+  .switch { width: 20px; height: 20px; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--line);
+         vertical-align: middle; margin-right: 6px; }
+  #cfg-peers { margin: 4px 0 0; padding-left: 20px; }
+  #cfg-log { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); background: var(--bg);
+             border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 12px 0 0; max-height: 200px;
+             overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0; }
+  dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; }
 </style>
 </head>
 <body>
@@ -61,13 +87,55 @@
     <p class="muted" id="try" hidden>No board at hand? <a href="try/">Try it in your browser</a>.</p>
   </section>
 
+  <details class="card" id="cfg-card">
+    <summary>Configure over USB</summary>
+    <p class="muted" style="margin:0 0 12px">With the board plugged in (and the Install dialog closed: it holds the
+      port), connect to read and change its colour, name, dev mode and brightness. Nothing leaves your computer.</p>
+    <div class="row">
+      <button class="btn" id="cfg-connect" type="button">Connect</button>
+      <button class="btn quiet" id="cfg-disconnect" type="button" hidden>Disconnect</button>
+      <button class="btn quiet" id="cfg-refresh" type="button" hidden>Refresh</button>
+      <span id="cfg-status" class="muted">Not connected.</span>
+    </div>
+    <div id="cfg-panel" hidden>
+      <div class="row">
+        <label for="cfg-color">Colour</label>
+        <input type="color" id="cfg-color" value="#ff8000">
+        <div class="swatches" id="cfg-swatches" role="group" aria-label="Preset colours"></div>
+      </div>
+      <div class="row">
+        <label for="cfg-name">Name</label>
+        <input type="text" id="cfg-name" maxlength="16" placeholder="up to 16 characters" autocomplete="off">
+        <button class="btn quiet" id="cfg-name-set" type="button">Set name</button>
+      </div>
+      <div class="row">
+        <label for="cfg-dev">Dev mode</label>
+        <input type="checkbox" class="switch" id="cfg-dev" role="switch">
+        <span class="muted">pulls a newer firmware from a nearby board over Bluetooth</span>
+      </div>
+      <div class="row">
+        <label for="cfg-bright">Brightness</label>
+        <input type="range" id="cfg-bright" min="0" max="100" step="1" value="100">
+        <span id="cfg-bright-v">100 %</span>
+      </div>
+      <dl class="kv">
+        <dt>Firmware</dt><dd id="cfg-version">?</dd>
+        <dt>Bluetooth address</dt><dd id="cfg-addr">?</dd>
+        <dt>Boards nearby</dt><dd><ul id="cfg-peers"><li class="muted">none</li></ul></dd>
+      </dl>
+    </div>
+    <pre id="cfg-log" aria-label="Last lines from the board" hidden></pre>
+  </details>
+
   <section class="card notes">
-    <h2 style="font-size:1.1rem;margin:0 0 12px">What's new</h2>
+    <h2>What's new</h2>
     <div id="notes" class="muted">loading…</div>
   </section>
 
-  <footer id="footer">Updates after this first install arrive over Wi-Fi: the board checks its channel by itself.</footer>
+  <footer id="footer">Updates after this first install arrive over USB from this page, or from another ColorMesh
+    board in dev mode.</footer>
 </main>
+<script src="config.js"></script>
 <script>
 // channels.json = {stable:{version,built,manifest}, beta:{...}|null, try?}, notes.json = {releases:[{version,date,notes}]},
 // site.json = {app, repo, fonts}; all written by tools/make_flasher_site.py

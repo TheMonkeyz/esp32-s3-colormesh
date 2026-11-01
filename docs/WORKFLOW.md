@@ -14,7 +14,7 @@ the rules are in [LESSONS.md](LESSONS.md).
   fix plan ◄── evaluation          release candidate ◄── document and commit ◄── the user tries it
                                          │
                                          ▼
-                                harness --ota vX.Y.Z-rc.N ──► stable (only with the user's OK)
+                       rc on a board (site / --flash), peers pull it ──► stable (only with the user's OK)
 ```
 
 ### 1. Change, then a test build
@@ -25,7 +25,7 @@ the rules are in [LESSONS.md](LESSONS.md).
   `v0.2.0-graph.3` is offered `v0.2.0-rc.1`, while `v0.2.1-graph.3` would hide it (L9).
 - Build in `build\v55` with its own sdkconfig (`forge.json` `build_dir`):
   `idf.py -B build\v55 -D SDKCONFIG=build\v55\sdkconfig build`.
-- Settings page changed? `cd tools/webtest && npm test` and look at `tools/webtest/shots/` before building firmware.
+- Flasher page's card changed? `node web/flash/config.test.js`, then try it on the local preview (TESTING.md §7).
 - A C file the host tests compile changed? `wsl make -C tests/host`.
 
 ### 2. Flash and probe
@@ -34,7 +34,7 @@ the rules are in [LESSONS.md](LESSONS.md).
 - `python tools/harness/harness.py --flash build/v55/<app>.bin <suites>` flashes through the devloop helper and runs
   suites; or stage and flash by hand (`tools/devloop/stage.py`, `devloop.py flash 120`) and act through the test
   console (`devloop.py send "screen"`).
-- Read `ota: Running … from ota_N` in the fresh log before anything else (L2).
+- Read `diag: running from ota_N` and `ble: advertising` in the fresh log before anything else (L2).
 - For "why is X slow": time the parts in a throwaway build with temporary logging (L53, L54). For hangs:
   breadcrumbs and `where` (L52).
 
@@ -42,13 +42,14 @@ the rules are in [LESSONS.md](LESSONS.md).
 
 - Behaviour: the harness's suites, or a probe script in the scratchpad that imports `Board` / `Log` from
   `tools/harness/board.py`.
-- Looks: `python tools/snapshot.py <screen> [out.png] --ip <ip>` for every screen the change touches, in every language.
+- Looks: `devloop.py send "shot <screen>"`, then `python tools/devloop/shot.py .devloop/serial_live.txt`, for every
+  screen the change touches, in every language.
 - Speed and memory: the harness's `perf` against `tools/harness/baseline.json`.
-- Every fix adds a check (harness test, Playwright test or host test) that fails on the old code.
+- Every fix adds a check (harness test, the card's Node test or host test) that fails on the old code.
 
 ### 4. The user tries it
 
-Synthetic touches and phone-less tests miss things (L25). Ask the user to try it during a log window and say exactly
+Synthetic touches miss things (L25). Ask the user to try it during a log window and say exactly
 what to do and when: "For the next 60 s: swipe left twice, then long-press the centre." Their words ("follow the
 finger", "a delay before it moves") are the most useful signal you will get; turn each into a measurement.
 
@@ -70,8 +71,9 @@ aside), commit. Usual shape: one code + docs commit, then one "Changelog: vX not
 ### 6. Release candidate, then stable
 
 Claude tags, pushes and tests release candidates (`.claude/skills/release-rc`): CI builds, the Pages site moves the
-Beta channel, `python tools/harness/harness.py --ota vX.Y.Z-rc.N` installs it with the device's own updater and runs
-every suite with `--expect`. Report the result. A **stable** tag needs the user's OK; say what is in it when asking.
+Beta channel. There is no updater on the board: install the rc on one board from the site (Beta) or with
+`harness.py --flash` on the release's parts, let the others pull it in dev mode, and run
+`python tools/harness/harness.py --no-net --expect vX.Y.Z-rc.N`. Report the result. A **stable** tag needs the user's OK; say what is in it when asking.
 Details: [RELEASING.md](RELEASING.md).
 
 ## The evaluation → fix-plan cycle
@@ -95,7 +97,7 @@ session, then shipped as v1.12.0.
 
 ### Claude Code on the PC (preferred)
 
-Claude runs in the project folder on the Windows PC: `idf.py`, Python, `gh`, WSL and the board's IP are all reachable.
+Claude runs in the project folder on the Windows PC: `idf.py`, Python, `gh` and WSL are all reachable.
 The devloop flash helper owns the COM port while logging; the harness and `devloop.py` talk to it through
 `.devloop/` (docs/PROTOCOL.md §1). Claude starts the helper itself in the background, windowless
 (`run_in_background`: `powershell -NoProfile -ExecutionPolicy Bypass -File tools\devloop\flash_helper.ps1`): nothing opens on the
@@ -110,13 +112,14 @@ first build that fetches a new tag (L199).
 Builds happen in a cloud container; Claude's shell on the PC is a Linux VM with no USB access, and it can't type into
 Windows terminals or reach the board's IP.
 
-1. The user starts `tools\devloop\start_flash_helper.bat` once (restart it after editing `flash_helper.ps1`; on a
-   Mac `python tools/devloop/flash_helper.py`, docs/MACOS.md).
+1. The user starts `tools\devloop\start_flash_helper.bat` once (restart it after editing `flash_helper.ps1`; on
+   macOS / Linux `python tools/devloop/flash_helper.py`).
 2. Claude builds in the cloud, copies the parts to the PC folder, runs `python tools/devloop/stage.py` (unique names,
    md5), then `python tools/devloop/devloop.py flash 120` (or writes `.devloop/flash.request` with the log seconds).
 3. Claude polls `.devloop/flash.status` and `.devloop/flash.done`, then reads `.devloop/serial_log.txt`. Stop early
    with `devloop.py stop`.
-4. No snapshots or harness from here: ask the user for a photo, or switch to Claude Code on the PC.
+4. No harness from here: ask for a `shot` in the log window (`devloop.py send "shot main"`), or a photo, or switch
+   to Claude Code on the PC.
 
 Cloud build recipe (network allowlists there blocked PyPI, dl.espressif.com, Docker Hub and the component registry;
 GitHub worked):
@@ -145,6 +148,6 @@ can't be written from there (L149).
 - A one-line note before anything over a minute; long silences read as "stuck".
 - Ask before taking over their screen; never type into their terminals.
 - During a log window, say exactly when to act and what to do.
-- Relay `>>> ASK THE USER` from the harness immediately (Easy Connect scans time out).
+- Relay `>>> ASK THE USER` from the harness immediately (a second board to hold).
 - Report what the log says, with the line, not an interpretation of a status message.
-- Restore any setting a test changed (language, delays, channel).
+- Restore any setting a test changed (colour, name, dev mode, brightness).

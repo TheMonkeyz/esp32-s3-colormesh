@@ -1,5 +1,10 @@
 # Backlog: changes from the apps that could go into espforge
 
+> **This project** (esp32-s3-colormesh) keeps no backlog here: this file is the framework's history as copied from
+> the espforge template. Anything from ColorMesh that could go into espforge (the harness's `--no-net` mode, the USB
+> configuration card, `shot` snapshots, a NimBLE component, forge_lvgl without forge_net…) goes to
+> `C:\Users\lmathieu\ESPDEV\espforge\docs\BACKLOG.md`, as CLAUDE.md says.
+
 Every project built on espforge (or that espforge came from) adds a line here when it changes something that could
 help the others: framework code, board support, tools, tests, docs, a lesson learned. An alignment session works
 through the list: port it (a PR here, then the apps take the new tag), or decide not to, and says so in the entry.

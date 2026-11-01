@@ -2,10 +2,6 @@
 
 Scope: 3 (later 5-10) round-display ESP32-S3 devices in one room, each broadcasting "my RGB colour + I am holding" in non-connectable advertisements and scanning continuously; target touch-to-peer-update latency 100-200 ms; Wi-Fi STA stays connected. All local file references are the installed ESP-IDF v5.5.4 under `C:\Espressif\esp-idf\` (read directly). Web sources are marked; anything not verified against a primary source is flagged.
 
-Note: this file was written in plan mode (the only writable path). The intended destination was `...\scratchpad\research_notes\Bluetooth mesh options for ESP32 S3\advertising_flood_nimble.md`.
-
----
-
 ## Q1. Legacy advertising limits in NimBLE on ESP32-S3 (minimum interval, changing data while advertising)
 
 ### Takeaway

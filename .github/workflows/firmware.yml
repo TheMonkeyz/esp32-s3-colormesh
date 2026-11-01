@@ -1,4 +1,4 @@
-# Firmware CI, releases and the web flasher / OTA site.
+# Firmware CI, releases and the web flasher site.
 #
 #  push to main / pull request -> build only (compile check) and the board-free tests. The images are kept as a
 #                                 workflow artifact for testing; nothing is published.
@@ -8,17 +8,15 @@
 #
 # Project values (app name, ESP-IDF version, chip, site URL) come from forge.json (job "config").
 #
-# The site is always assembled from the files attached to the releases, so people and devices install exactly what was
-# released. Beta is offered only while the highest pre-release version is above the highest stable one (compared as
-# the firmware does, not by publish date).
+# The site is always assembled from the files attached to the releases, so people install exactly what was released.
+# Beta is offered only while the highest pre-release version is above the highest stable one (compared as the
+# firmware does, not by publish date). ColorMesh has no Wi-Fi: the site is the only place a board is installed or
+# configured from (over USB, in the browser), or a board in dev mode pulls a newer firmware from a peer over Bluetooth.
 #
-# Every push also builds the display in the browser (job "emulator", web/emu): a pull request builds its own commit
-# (a change to the emulator or the screens is checked before it is merged); main and tags build the latest stable
-# release, which the site publishes as try/ ("Try it in your browser"), or goes out without it if that build failed.
-#
-# Every push also runs the board-free tests (the settings page in Playwright against the mock device, the host unit
-# tests of the C code, the harness's own unit tests); a release needs them to pass. Actions are pinned to commit SHAs
-# (the comment says which tag) and Dependabot proposes updates (.github/dependabot.yml); esptool is pinned too.
+# Every push also runs the board-free tests (the host unit tests of the C code against espforge's components at the
+# pinned tag, the harness's own unit tests, the flasher page's configuration card); a release needs them to pass.
+# Actions are pinned to commit SHAs (the comment says which tag) and Dependabot proposes updates
+# (.github/dependabot.yml); esptool is pinned too.
 #
 # One-time setup on GitHub (docs/RELEASING.md):
 #  - Settings -> Pages -> Build and deployment -> Source = "GitHub Actions"
@@ -77,7 +75,7 @@ jobs:
         id: ver
         run: |
           v=$(git describe --tags --always)
-          echo "$v" > version.txt   # ESP-IDF uses version.txt as the app version (boot log, settings page, updater)
+          echo "$v" > version.txt   # ESP-IDF uses version.txt as the app version (boot log, system page, the peers' view)
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Firmware version: $v"
 
@@ -111,28 +109,9 @@ jobs:
           name: firmware-${{ steps.ver.outputs.version }}
           path: dist/
 
-  webtest:
-    # The settings page (main/web/index.html) in Playwright against the mock device: no board needed
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
-        with:
-          node-version: "22"
-      - name: Playwright tests
-        working-directory: tools/webtest
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-          npm test
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        if: always()
-        with:
-          name: webtest-shots
-          path: tools/webtest/shots/
-
   host-tests:
-    # C files built with gcc against shims of the ESP-IDF headers (tests/host), AddressSanitizer on; the harness's logic
+    # C files built with gcc against shims of the ESP-IDF headers (tests/host), AddressSanitizer on, with espforge's
+    # components at the tag main/idf_component.yml pins; the harness's logic; the flasher page's configuration card
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
@@ -141,6 +120,8 @@ jobs:
           mkdir -p cjson
           curl -fsSL -o cjson/cJSON.c https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.19/cJSON.c
           curl -fsSL -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.19/cJSON.h
+      - name: espforge (the components at the tag in main/idf_component.yml)
+        run: python3 tools/fetch_forge.py
       - name: Host tests
         run: make -C tests/host CJSON="$PWD/cjson"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7
@@ -150,77 +131,14 @@ jobs:
         run: |
           pip install --quiet "pyserial==3.5"
           python -m unittest discover -s tools/harness -p "test_*.py" -v
-
-  emulator:
-    # The display in the browser (web/emu): LVGL and the app's screens built to WebAssembly, then its smoke test.
-    # A pull request (or a push to a branch other than main) builds its own commit, so a change to the emulator or the
-    # screens is checked before it is merged. A push to main or a tag builds the latest stable release (the tag itself
-    # when one is pushed), so the site's "Try it" runs the stable firmware; a stable release older than the emulator
-    # has no web/emu, and then this commit is built (said in the log). Not needed by a release: if it fails, the site
-    # is published without "Try it". The artifacts (emulator, emulator-smoke) are named the same either way: the pages
-    # job downloads them only after a release or by hand from main, never from a pull request.
-    runs-on: ubuntu-24.04
-    env:
-      # true: build this commit (a pull request, a push to another branch); false: the latest stable release
-      THIS_COMMIT: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          fetch-depth: 0            # tags
-      - name: Which firmware (this commit - a pull request or a branch)
-        if: env.THIS_COMMIT == 'true'
-        run: echo "Emulator of this commit, $(git describe --tags --always) (${GITHUB_HEAD_REF:-$GITHUB_REF_NAME})"
-      - name: Which firmware (the latest stable release - main and tags, for the site)
-        if: env.THIS_COMMIT != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* && "$GITHUB_REF_NAME" != *-* ]]; then ref="$GITHUB_REF_NAME"
-          else ref=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName'); fi
-          if [ -n "$ref" ] && git cat-file -e "$ref:web/emu/Makefile" 2>/dev/null; then
-            git checkout -q "$ref"; echo "Emulator of $ref"
-          else
-            echo "::notice::${ref:-no stable release} has no emulator (web/emu): built from $(git describe --tags --always)"
-          fi
-      - name: LVGL and cJSON (the versions the firmware uses)
-        run: |
-          lv=$(sed -nE 's#^ *lvgl/lvgl: *"?([0-9.]+)"?.*#\1#p' main/idf_component.yml)
-          echo "LVGL $lv"
-          git clone -q --depth 1 --branch "v$lv" https://github.com/lvgl/lvgl.git lvgl
-          mkdir -p cjson
-          curl -fsSL -o cjson/cJSON.c https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.19/cJSON.c
-          curl -fsSL -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/v1.7.19/cJSON.h
-      - name: Emscripten 6.0.11 (the version the emulator was tested with)
-        run: |
-          git clone -q --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
-          "$HOME/emsdk/emsdk" install 6.0.11 && "$HOME/emsdk/emsdk" activate 6.0.11
-      - name: Build
-        run: |
-          source "$HOME/emsdk/emsdk_env.sh"
-          make -C web/emu -j4 LVGL="$PWD/lvgl" CJSON="$PWD/cjson"
-          mkdir -p emu && find web/emu/build -maxdepth 1 -type f -exec cp {} emu/ \;   # the page's files, not the objects
-          ls -l emu
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "22"
-      - name: Smoke test (headless Chromium - it draws, follows a drag and a press, its settings page answers)
-        run: |
-          if [ ! -f web/emu/forge/smoke.js ]; then echo "no smoke test in this release"; exit 0; fi
-          cd tools/webtest && npm ci && npx playwright install --with-deps chromium
-          node ../../web/emu/forge/smoke.js ../../web/emu/build ../../emu-smoke
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        if: always()
-        with:
-          name: emulator-smoke
-          path: emu-smoke/
-          if-no-files-found: ignore
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
-        with:
-          name: emulator
-          path: emu/
+      - name: Flasher page, configuration card (web/flash/config.js)
+        run: node web/flash/config.test.js
 
   release:
-    needs: [config, build, webtest, host-tests]
+    needs: [config, build, host-tests]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -241,10 +159,10 @@ jobs:
             Or with esptool, first install (erases saved settings):
             `esptool.py --chip ${{ needs.config.outputs.chip }} write_flash 0x0 ${{ needs.config.outputs.app }}-${{ needs.build.outputs.version }}-full.bin`
 
-            To keep saved settings, update from the device itself, or flash the separate parts (bootloader, partition table, `${{ needs.config.outputs.app }}-${{ needs.build.outputs.version }}.bin`, `ota_data_initial.bin`) at the offsets listed in `flash-parts.json`.
+            To keep saved settings, flash the separate parts (bootloader, partition table, `${{ needs.config.outputs.app }}-${{ needs.build.outputs.version }}.bin`, `ota_data_initial.bin`) at the offsets listed in `flash-parts.json`, or let a board in dev mode pull it from a peer over Bluetooth.
 
   pages:
-    needs: [config, release, emulator]
+    needs: [config, release]
     # after every release, or by hand from main
     if: always() && needs.config.result == 'success' && (needs.release.result == 'success' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
@@ -260,12 +178,6 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
-        if: needs.emulator.result == 'success'      # (no emulator: the site without "Try it")
-        with:
-          name: emulator
-          path: emu
 
       - name: Download the latest stable release and any newer pre-release
         env:
@@ -300,7 +212,6 @@ jobs:
             gh release download "$beta" --dir "rel/beta" --pattern "*.bin" --pattern "flash-parts.json"
             args="$args --beta rel/beta"
           fi
-          if [ -f emu/emu.wasm ]; then args="$args --emu emu"; fi
           python3 tools/make_flasher_site.py site $args --out _site
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5

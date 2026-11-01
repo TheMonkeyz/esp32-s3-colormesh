@@ -94,6 +94,10 @@ Number them; one entry per bug: symptom, cause, fix, the test that guards it. Ge
 ## User preferences learned
 
 Add each preference the user states (gestures, wording, timing, look) with the date, in their words when possible.
+- 2026-10-31: screen texts in the **vous** form with an infinitive: the main screen's hint is
+  "Toucher l'écran pour envoyer votre couleur" / "Touch the screen to send your colour" (the user replaced
+  "Gardez le doigt pour envoyer votre couleur"); the pick screen "Choisissez votre couleur" / "Touchez une pastille".
+
 
 ## Useful facts
 

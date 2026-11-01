@@ -1,15 +1,16 @@
 # Device ↔ tools protocol
 
-Everything the PC-side tools (`tools/devloop`, `tools/harness`, `tools/snapshot.py`, `tools/webtest`) rely on from
-the firmware. Keep this file and the firmware in step: a tool that parses a line the firmware no longer prints fails
-silently or, worse, waits out a timeout. Project values (app name, screen size, setup SSID, ready line…) come from
-`forge.json`.
+Everything the PC-side tools (`tools/devloop`, `tools/harness`) and the Pages site's *Configure over USB* card
+(`web/flash/config.js`) rely on from the firmware. Keep this file and the firmware in step: a tool that parses a line
+the firmware no longer prints fails silently or, worse, waits out a timeout. Project values (app name, screen size,
+ready line…) come from `forge.json`. ColorMesh has no Wi-Fi: no HTTP API, no settings page, no update polling; the
+USB console is the only way in, and the Pages site serves people, not devices.
 
 ## 1. Files between the agent and the flash helper (`.devloop/`)
 
-The agent's shell may have no USB access (Claude desktop / cloud). The flash helper (`tools/devloop/`) runs in a
-window on the PC that owns the port and talks through plain files in `.devloop/`. Two helpers speak it: Windows'
-`flash_helper.ps1` + `monitor.ps1` and the Python `flash_helper.py` (macOS / Linux, docs/MACOS.md):
+The agent's shell may have no USB access (Claude desktop / cloud). The flash helper (`tools/devloop/`) runs on the PC,
+owns the port and talks through plain files in `.devloop/`. Two helpers speak it: Windows' `flash_helper.ps1` +
+`monitor.ps1` and the Python `flash_helper.py` (any OS; also one-shot flashes of the other boards with `--port`):
 
 | File | Direction | Meaning |
 |---|---|---|
@@ -23,16 +24,18 @@ window on the PC that owns the port and talks through plain files in `.devloop/`
 | `serial_live.txt` | monitor | Grows line by line while logging (tail this). |
 | `serial_log.txt` | monitor | The whole window, written when it ends. |
 | `flash_log.txt`, `flash_helper.log` | helper | esptool's output; the helper's own history. |
-| `harness.ask` | harness → person | A step only a person can do (scan a QR code, tap the screen). |
+| `harness.ask` | harness → person | A step only a person can do (hold a board, plug a second one). |
 | `stage/` | agent | Staged parts, each copied under a **unique name** and checked by md5 before `flash.request`. |
-| `ip`, `key` | tools | Cached display IP and settings key. **Reset after every flash or install.** |
 | `port` | helpers | The board's COM port once found among several boards (the chip that answered esptool's `chip_id`); asked again when it is gone. |
+| `board.lock` | agents | Several agents share board A: created (with the agent's name) before a flash, only if absent; deleted when the log window ends (CLAUDE.md). |
 
 ## 2. Test console (USB Serial/JTAG, `forge_core/testcon`)
 
-One command per line. Every answer is a log line with the tag `test`: `I (…) test: ok …`, `test: <name> k=v …` or
-`W (…) test: error …`. Commands are registered by the components and the app (`testcon_register`). An unknown command answers
-`test: error unknown command '<name>' (help lists them)`.
+One command per line, 115200 baud. Every answer is a log line with the tag `test`: `I (…) test: ok …`,
+`test: <name> k=v …`, `test: cfg {json}` or `W (…) test: error …`. Commands are registered by the components and the
+app (`testcon_register`). An unknown command answers `test: error unknown command '<name>' (help lists them)`. The
+Pages card parses these lines with the ESP-IDF prefix (`I (1234) `) stripped (`web/flash/config.js`,
+`config.test.js`).
 
 | Command | Answer | From |
 |---|---|---|
@@ -43,68 +46,65 @@ One command per line. Every answer is a log line with the tag `test`: `I (…) t
 | `where` | `test: where <k=v from each breadcrumb provider> task_lvgl=<state>` — takes **no lock**, answers when the rest hangs | forge_core |
 | `memspeed` | `test: memspeed …_ms=…` | forge_core |
 | `reboot` | `test: ok restarting` | forge_core |
-| `key` | `test: key <16 hex>` | forge_net (web) |
-| `wifi status\|offline\|online\|offline-boot\|offline-boot-short\|lowlat on\|off` | `test: wifi connected=0/1 sta_ssid=… portal=0/1 ap=0/1 ap_clients=N dpp=0/1 retries=N channel=N ap_pass=<8 chars> ps=none\|min\|max lowlat=N dl=<holder\|none> bg=N` (the first keys as weather_amoled; `ps`: Wi-Fi power save, `lowlat`: `net_low_latency()` users, `dl`: who holds the download slot, `bg`: background jobs waiting or running; `lowlat on\|off` adds or removes a user) | forge_net |
-| `portal windows-quiet` | `test: ok portal windows-quiet` | forge_net |
-| `fps [reset]` | `test: fps frames=… render_avg_ms=… render_max_ms=… anim_frames=… anim_fps=… gap_max_ms=… gap_max_at_ms=… gap_max_kind=lvgl>move… mpx=…` (the gap from an LVGL redraw to a move's first frame is not counted; `gap_max_kind` is text) | board display |
-| `tap X Y`, `press X Y [ms]`, `swipe left\|right\|up\|down`, `drag X1 Y1 X2 Y2 [ms]` | `test: ok tap` … | forge_lvgl (touch inject) |
-| `screen` | `test: screen <name>` (a name from `forge.json` `screens`) | forge_lvgl (screen registry) |
+| `fps [reset]` | `test: fps frames=… render_avg_ms=… render_max_ms=… anim_frames=… anim_fps=… gap_max_ms=… …` | board display |
+| `tap X Y`, `press X Y [ms]`, `swipe left\|right\|up\|down`, `drag X1 Y1 X2 Y2 [ms]` | `test: ok tap` … (simulated touches enter at the touch controller read, L105) | forge_lvgl |
+| `screen` | `test: screen <name>` (`forge.json` `screens`: `pick main system message`) | forge_lvgl |
 | `screen <name>` | `test: ok screen <name>` | forge_lvgl |
-| `profile` | `PROFILE-BEGIN <name>` … `PROFILE-END <name>`, then `test: ok profile done` (profiler builds only) | forge_lvgl |
-| `presence` | `test: presence state=0\|1\|2 brightness=% quiet_s=S mic=0/1 imu=0/1 level=dB threshold=dB calibrating=0/1 cal=0\|1\|2 spread=dB` (state: active, dim, off; cal: none, ok, noisy) | forge_presence |
-| `presence calibrate N` | `test: ok presence calibrate N` (then `presence: calibrated: ok\|too noisy, baseline kept, …`) | forge_presence |
-| `wake` | `test: ok wake` | forge_presence |
-| `power` | `test: power cpu_mhz=N panel=asleep\|awake screen_lock=0\|1` (cpu_mhz is always the maximum: the command itself runs; `screen_lock` says whether the CPU is held at 240 MHz while idle) | board |
-| `shot [SCREEN [DIV]]` | `SHOT name w h`, one `S:<base64 RGB565 row>` line per row, `SHOTEND` (raw, straight to USB), then `test: ok shot name wxh`: the screen rendered off-display, every DIV-th pixel (1..4, default 2). `tools/devloop/shot.py` makes PNGs from a log. For a session without HTTPS to the board. | forge_lvgl |
-| `netstat` | `test: netstat link_rx=N link_drop=N ip_rx=N ip_drop=N tcp_rx=N tcp_drop=N tcp_err=N tcp_proterr=N tcp_rterr=N udp_rx=N` (lwIP's counters, `CONFIG_LWIP_STATS`): does anything from outside reach the chip? (L208) | forge_net |
+| `power` | `test: power cpu_mhz=N panel=asleep\|awake screen_lock=0\|1` | board |
+| `shot [SCREEN [DIV]]` | `SHOT name w h`, one `S:<base64 RGB565 row>` line per row, `SHOTEND` (raw, straight to USB), then `test: ok shot name wxh`: the screen rendered off-display, every DIV-th pixel (1..4, default 2). `tools/devloop/shot.py` makes PNGs from a log. | app (`console.c`, from forge_lvgl's) |
+| `cfg` | `test: cfg {"color":"#rrggbb","dev":true\|false,"name":"<up to 16 chars>","bright":0-100,"version":"v…","addr":"aa:bb:cc:dd:ee:ff","peers":[{"addr":"…","color":"#rrggbb","holding":true\|false,"ver":"v…"}]}` — one line, everything the Pages card shows | app |
+| `color RRGGBB` | `test: ok color #rrggbb` (saved; the ring and the advertisement change at once) or `test: error …` | app |
+| `name <text>` | `test: ok name <text>` (up to 16 characters, UTF-8; `name ` with nothing clears it) | app |
+| `devmode on\|off` | `test: ok devmode on\|off` (saved; the advertisement's dev bit) | app |
+| `bright N` | `test: ok bright N` (0-100, saved, applied) | app |
+| `peers` | `test: peers n=N` then one `test: peer <addr> v<ver> #rrggbb hold\|idle rssi=-NN age_ms=N` per peer | app |
+| `hold on\|off` | `test: ok hold on\|off`: as a finger down / up on `main` (test only) | app |
+| `fwpull <addr>` | `test: ok fwpull <addr>`: dev-mode pull from that peer by hand (test only) | app |
 
 ## 3. Log lines the tools read
 
 | Line | Meaning |
 |---|---|
-| `ota: Running <ver> from <ota_0\|ota_1>, channel <stable\|beta>` | Which image booted. Check it in a fresh log **before** testing. |
-| `ota: Update installed, restarting` | OTA download written. |
-| `ota: New firmware ran N s…: marked valid (no rollback)` | The new image is confirmed; a restart before this line rolls it back. |
-| `net: Connected, IP a.b.c.d` | Station up (`forge.json` `ip_line`). |
-| `web: Settings page: https://a.b.c.d/` | Web server up (`https://a.b.c.d:port/` when `CONFIG_FORGE_HTTPS_PORT` isn't 443; `forge.json` `https_port` tells the tools). |
+| `diag: firmware <ver>`, `diag: running from ota_0\|ota_1` | Which image and slot booted (the harness's `--no-net` boot check; this app links no forge_ota, so there is no `ota: Running` line). Check them in a fresh log **before** testing. |
 | `diag: mark <stage>` | Boot stages; `diag: mark app ready` = `forge.json` `ready_line`. |
-| `slide: drag: first frame after N ms, F frames in T ms (X fps), to next/to prev/back \| gap max N ms, held reads E err U up (longest N ms), finger still max N ms, samples N, renders N, V px/ms` | Each drag drawn as pictures (forge_lvgl). |
-| `slide: change: picture N ms, F frames in T ms (X fps)` | An in-place change or screen load slid as pictures. |
+| `cfg: …` | The configuration loaded (`cfg: color #rrggbb dev 0 name "…" bright N`) or a value changed. |
+| `ble: address aa:bb:cc:dd:ee:ff` | The public address: the board's identity, the peer table's key. |
+| `ble: synced` | The NimBLE host is synced with the controller. |
+| `ble: advertising` | `ble_gap_adv_start` succeeded: the flood is on air (the harness's `hold_sends` waits for it). |
+| `ble: scanning` | The continuous passive scan started. |
+| `mesh: hold on` / `mesh: hold off` | This board's finger down / up on `main` (also from `hold on\|off`). |
+| `mesh: peer <addr> v<ver> #rrggbb hold\|idle` | A peer's state changed: first heard, new colour, hold on or off, or expired (the harness's `peers_seen`). |
+| `mesh: mix #rrggbb n=<holders>` | What the centre shows and how many hold (self included). |
+| `fw: …` | The dev-mode pull: `fw: target <addr> v<ver>`, `fw: connected`, `fw: 1234/2048 KB`, `fw: verified, restarting`, `fw: confirmed` (after 60 s), `fw: failed <why>`. |
+| `SHOT name w h` … `SHOTEND` | A screen over USB (§2 `shot`). |
+| `slide: drag: first frame after N ms, F frames in T ms (X fps), …` | Each drag drawn as pictures (forge_lvgl). |
 | `diag: mark <stage> internal N KB free (largest N), DMA N KB, PSRAM N KB` | A boot stage. |
-| `diag: heap: internal N KB free (min ever N, largest block now N / worst N) \| DMA N KB (largest now N / worst N) \| PSRAM N KB free (min ever N, largest N) \| failed allocs N, LVGL in internal RAM N` | Every period (`tools/diag_summary.py`). PSRAM's `largest` is `-` when `FORGE_DIAG_PSRAM_LARGEST` is off. |
-| `diag: tasks: name(cC pP) X.X% NB \| …`, `diag: cpu: core0 N% busy, core1 N% busy (window N s)` | Per task: core, priority, CPU, stack bytes never used. Absent when `FORGE_DIAG_TASK_STATS` is off. |
-| `diag: stats cost: task list N us, PSRAM largest block N us (-1: off by Kconfig)` | Once at start: how long each statistic holds interrupts off on this board (L201). |
-| `display: panel asleep`, `display: panel awake` | The panel put to sleep once the fade down reached 0 (forge_presence's `screen_off` hook, the board's `display_sleep`); awake again, a whole frame sent, on the first step of the fade up. |
-| `diag: display: N frames, render avg N ms max N ms, … \| animation N fps … \| LVGL lock wait max N ms, longest hold N ms by <task>` | From the board (diag hook). |
+| `diag: heap: internal N KB free (min ever N, largest block now N / worst N) \| DMA N KB … \| PSRAM N KB free … \| failed allocs N, LVGL in internal RAM N` | Every period (`tools/diag_summary.py`). |
+| `diag: tasks: name(cC pP) X.X% NB \| …`, `diag: cpu: core0 N% busy, core1 N% busy (window N s)` | Per task: core, priority, CPU, stack bytes never used. |
+| `diag: display: N frames, render avg N ms max N ms, … \| LVGL lock wait max N ms, longest hold N ms by <task>` | From the board (diag hook). |
 | `App version: <ver>` | ESP-IDF's own boot line. |
 | `diag: boot reset=<reason> …`, `diag: coredump …` | Boot info; the last crash, then erased. |
 | `rst:0x…` | A restart (the harness fails a test that didn't expect one). |
 | `Guru Meditation`, `Backtrace:` | A crash (the harness decodes it with addr2line when the ELF matches). |
 
-## 4. HTTP API (`forge_net/web`)
+## 4. HTTP API
 
-HTTPS on :443 (`CONFIG_FORGE_HTTPS_PORT`; the tools read `forge.json` `https_port`) with a per-device self-signed
-certificate; HTTP on :80 serves the captive portal on the setup network
-(192.168.4.x) and redirects to HTTPS otherwise. **Every POST and `/api/snapshot` carries `X-Key: <key>`**; POST bodies
-are JSON (`415` otherwise); a Host header that isn't the display's address gets `421`.
+None: ColorMesh has no Wi-Fi. forge_net is linked (forge_lvgl's `screens.h` needs one of its structs) but never
+started; no port is open. Everything the settings page did in other espforge apps goes through §2.
 
-| Route | Answer |
-|---|---|
-| `GET /` | The settings page (`main/web/index.html`, sent in 1 KB chunks). |
-| `GET /api/info` | `{"app","version","ip","ssid","rssi","uptime_s","setup":bool,"lang","languages":[{code,name}]}` |
-| `GET /api/scan` | `[{"ssid","rssi","secure"}]` |
-| `POST /api/wifi` | `{"ssid","pass"}` → saved, restart when safe. |
-| `GET /api/update` | `{"current","latest","channel","state","progress","error","pending_verify","uptime_s","err","rolled_back"?,"notes"?}` — `rolled_back`: the version that was undone (string, shown once); `err`: `ota_err_t` code; `notes`: only when `available` — `state`: `idle checking up_to_date available downloading done failed` |
-| `POST /api/update` | `{"action":"check"}`, `{"action":"install"}` or `{"channel":"stable"\|"beta"}` |
-| `GET /api/snapshot?screen=<name>` | 24-bit BMP of that screen, rendered off-display. `forge.json` `screens_not_shown`: screens the harness snapshots without showing them (showing changes the device's state: the starter's Easy Connect page leaves the home network). |
-| `POST /api/settings` | App settings, starter: `{"lang":"en"\|"fr"}` |
-| `GET /api/presence` (no key) | Screen dimming: `{"ok","enabled","margin_db","wake_s","dim_s","off_s","bright_pct","dim_pct","baseline_db","level_db","threshold_db","state":"active"\|"dim"\|"off","wake_progress","quiet_s","calibrating","calib_left_s","cal":"none"\|"ok"\|"noisy","cal_spread_db","mic_ok","brightness","imu_ok","motion_g","motion_wake","motion_thr"}` (forge_presence) |
-| `POST /api/presence` | Any of `enabled margin_db wake_s dim_s off_s bright_pct dim_pct motion_wake motion_thr` (held to the limits; `baseline_db` only by calibration) → GET's answer, `"ok":false` = not saved |
-| `POST /api/calibrate` | `{"seconds":5}` → GET's answer with `"calibrating":true`, or `{"ok":false,"why":"no_mic"\|"busy"}` (200). Its end: `"cal"` in GET. |
+## 5. The Pages site (GitHub Pages, `tools/make_flasher_site.py`)
 
-## 5. OTA site (GitHub Pages, `tools/make_flasher_site.py`)
+`<ota_site>/channels.json` (`{"stable":{"version","built","manifest"},"beta":{…}|null}`),
+`<ota_site>/<channel>/manifest.json` (esp-web-tools: the parts at their offsets; NVS is not among them, so an install
+keeps the saved colour, name, dev mode and brightness), `<ota_site>/notes.json` (from `CHANGELOG.md`), `site.json`
+(`{app, repo, fonts}`), and `config.js` beside `index.html` for the *Configure over USB* card. No board reads the
+site: it is for the person at the computer. Version order (`forge_core/version.c`, mirrored in CI and in the
+advertisement's version-kind byte): `vX.Y.Z-anything < vX.Y.Z-rc.N < vX.Y.Z < vX.Y.Z-N-gHASH`.
 
-`<ota_site>/channels.json` (`{"stable":{"version","built","manifest"},"beta":{…}|null}`; no beta = stable), `<ota_site>/<channel>/manifest.json` (esp-web-tools;
-the updater takes the part at offset 0x10000), `<ota_site>/notes.json` (from `CHANGELOG.md`). A board only installs
-a version **above** what it runs and with the same project name (`esp_app_desc.project_name` = `forge.json` `app`).
-Version order (`forge_core/version.c`, mirrored in CI): `vX.Y.Z-anything < vX.Y.Z-rc.N < vX.Y.Z < vX.Y.Z-N-gHASH`.
+## 6. The Pages card over Web Serial (`web/flash/config.js`)
+
+Chrome / Edge on a computer, https or localhost; the port must be free (the Install dialog of the same page holds it
+while open). The card opens the port at 115200, reads lines (CRLF or LF, ANSI colour codes stripped, the ESP-IDF
+prefix `I (1234) ` optional), sends `cfg` and renders the JSON of the `test: cfg {…}` line; each control sends its
+command (`color RRGGBB`, `name <text>`, `devmode on|off`, `bright N`) and `cfg` again 300 ms later, so what it shows
+is what the board saved; a `test: error …` line is shown as is. It never sends anything else.

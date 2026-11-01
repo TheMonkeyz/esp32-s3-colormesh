@@ -1,11 +1,7 @@
-# Proposes updates to the pinned GitHub Actions (firmware.yml pins them to commit SHAs) and the test tools
+# Proposes updates to the pinned GitHub Actions (firmware.yml pins them to commit SHAs)
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: monthly
-  - package-ecosystem: npm
-    directory: /tools/webtest
     schedule:
       interval: monthly
