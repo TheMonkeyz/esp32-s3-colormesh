@@ -16,7 +16,7 @@ MAIN := ../../main
 OUT := build
 CFLAGS := -std=gnu11 -D_DEFAULT_SOURCE -g -O1 -Wall -Wno-unused-function -fsanitize=address,undefined \
           -fno-sanitize-recover=undefined -Ishim -I$(CORE)/include -I$(MAIN) -include shim/host.h
-TESTS := utf8 version textfit pager testcon i18n mesh wave fw_auth rps
+TESTS := utf8 version textfit pager testcon i18n mesh wave fw_auth rps voice
 
 all: $(TESTS:%=$(OUT)/test_%)
 	@set -e; for t in $(TESTS); do ./$(OUT)/test_$$t; done
@@ -57,8 +57,14 @@ $(OUT)/test_fw_auth: $(FWA_SRC) $(MAIN)/fw_auth.h $(MAIN)/mesh_proto.h check.h |
 $(OUT)/test_rps: test_rps.c $(MAIN)/rps.c $(MAIN)/rps.h check.h | $(OUT)
 	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined 	    -I$(MAIN) -o $@ test_rps.c $(MAIN)/rps.c
 
+# The voice clip's pure parts (adpcm.c, clip_chunks.c, ringtone.c), C99 with libm
+VOICE_SRC := test_voice.c $(MAIN)/adpcm.c $(MAIN)/clip_chunks.c $(MAIN)/ringtone.c $(MAIN)/calls.c
+$(OUT)/test_voice: $(VOICE_SRC) $(MAIN)/adpcm.h $(MAIN)/clip_chunks.h $(MAIN)/ringtone.h $(MAIN)/calls.h check.h | $(OUT)
+	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -I$(MAIN) -o $@ $(VOICE_SRC) -lm
+
 $(OUT):
 	mkdir -p $(OUT)
 clean:
 	rm -rf $(OUT)
 .PHONY: all clean bench
+

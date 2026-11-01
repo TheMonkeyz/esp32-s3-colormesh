@@ -5,6 +5,27 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.7 - 2026-11-01
+- Calls: the caller sees everyone who answers, one dot per board in its colour, with the doo-di-dit for each; an
+  answer that comes after "Answered" closed opens it again, as long as the others can still ring.
+- The Call button is easier to hit: a bigger touch area, mostly below it, and a press near it never starts a
+  recording.
+
+## v0.6.0-rc.5 - 2026-11-01
+- Calls: the ring now starts on its first note (the speaker wakes up on a short silence first).
+- Calls: the ringing board says "Touch the screen to answer"; a touch answers. The caller shows "Calling…" in its
+  colour, then "Answered" in the colour of the board that answered, with a short rising doo-di-dit.
+- Console: `ring answer`, `ring cancel`, `ring answered` (plays the answered sound here).
+
+## v0.6.0-rc.3 - 2026-11-01
+- Voice clips: swipe to the last page ("Voice"), hold the screen and talk (up to 5 s), let go. Every board in range
+  gets the clip at the same time and plays it at once, with "Message" in your colour.
+- Call: the green Call button on the same page makes every other board ring with the classic phone tune and show
+  "Incoming call" in your colour; touch the screen to stop it.
+- Console: `clip rec <ms>`, `clip send`, `clip play`, `clip info`, `ring`, `ring local`, `ring stop`.
+- Bluetooth now uses extended advertising (the colour flood sends the same packets as before; older boards still
+  hear it). Needs this version on every board for clips and calls.
+
 ## v0.5.0-rc.3 - 2026-11-01
 - Rock paper scissors: the title at the top of the game page sits lower, clear of the coloured ring.
 

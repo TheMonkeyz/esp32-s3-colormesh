@@ -110,7 +110,15 @@ Add each preference the user states (gestures, wording, timing, look) with the d
   ECDSA P-256 key pair (private key in plain NVS: whoever holds the admin board can push firmware; said to the
   user); other boards store its public key once over USB (`trust <base64>`); a board not in dev mode pulls only
   after a nonce challenge the admin signs over (nonce, image length, SHA-256, version). Dev mode stays open.
-
+- 2026-11-01, voice clips and calls: record on a **new fifth page** (hold to talk, max 5 s), receivers **play at
+  once**, clips sent by **multicast** (BLE 5 periodic advertising, not one link per board); a Call button rings the
+  others with the classic phone tune. The ring must sound like the user's recording of the old phone (buzzer timbre,
+  no rasp), with a **sharp end, not a fade**.
+- 2026-11-01, calls: the ringing board says "Toucher l'écran pour répondre" (not "pour arrêter"); the caller must
+  see when a callee answers, with a sound: the user picked **#6 of ten, a rising doo-di-dit (A5 C#6 E6)** in the
+  ring's buzzer sound. The caller must see **everyone** who answered (a dot each), not only the first.
+- 2026-11-01: fingers land low on the voice page's Call button (rc.6 missed a press 21 px under it): keep its touch
+  margin large and never start a recording near it.
 
 ## Useful facts
 
@@ -133,5 +141,10 @@ rediscover.
 - `build\v55\CMakeCache.txt` can hold a cached `PROJECT_VER` (it held v0.4.0 on 2026-11-01): it beats
   `version.txt`, so a test build kept the old label. Pass `-D PROJECT_VER=<label>` or check the
   `App "colormesh" version:` line of the build before flashing.
+- Extended advertising (v0.6.0): the flood is ext instance 0 with legacy PDUs, so old and new firmware hear each
+  other and pulls still work across the switch. A clip's periodic train (instance 1, 10 ms) sends 5 s of voice in
+  5.4 s to every board at once; `ble_gap_periodic_adv_set_data` every 10 ms was never refused (rc.2/rc.3). Internal
+  RAM at app ready is 98 KB free, largest block 31 KB since then (I2S both ways + ext adv).
+- The microphones are quiet: a silent room peaks at ~140 of 32767 at 24 dB gain; clip.c scales clips up to x8.
 - A board with a label the peers already hold does not serve them again (`not newer`): every build the boards pull
   consumes its label (rc.2-rc.4 on 2026-10-31). Probe before letting a full pull complete.
