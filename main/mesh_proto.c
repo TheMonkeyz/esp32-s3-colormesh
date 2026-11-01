@@ -7,7 +7,7 @@
 int mp_encode(const mp_state_t *s, uint8_t *buf, int cap)
 {
     if (!s || !buf || cap < MP_AD_SIZE) return -1;
-    memset(buf, 0, MP_AD_SIZE);                    // reserved bytes 22-29 stay zero
+    memset(buf, 0, MP_AD_SIZE);                    // reserved bytes 26-29 stay zero
     buf[0] = MP_AD_SIZE - 1;                       // the AD length counts the type and the value
     buf[1] = 0xFF;                                 // manufacturer specific data
     buf[2] = MP_COMPANY & 0xFF;
@@ -27,6 +27,10 @@ int mp_encode(const mp_state_t *s, uint8_t *buf, int cap)
     buf[19] = s->b2r;
     buf[20] = s->b2g;
     buf[21] = s->b2b;
+    buf[22] = s->game_seq;
+    buf[23] = s->game_starter;
+    buf[24] = s->game_left;
+    buf[25] = s->game_pick;
     return MP_AD_SIZE;
 }
 
@@ -49,6 +53,10 @@ bool mp_decode(const uint8_t *mfg, int len, mp_state_t *out)
     s.b2r = mfg[17];
     s.b2g = mfg[18];
     s.b2b = mfg[19];
+    s.game_seq = mfg[20];
+    s.game_starter = mfg[21];
+    s.game_left = mfg[22];
+    s.game_pick = mfg[23];
     *out = s;
     return true;
 }

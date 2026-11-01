@@ -10,7 +10,7 @@
   "monitor_baud": 115200,
   "no_net": true,
   "screen": { "w": 466, "h": 466, "shape": "round" },
-  "screens": ["pick", "main", "system", "message"],
+  "screens": ["pick", "main", "system", "game", "message"],
   "screens_not_shown": [],
   "ready_line": "diag: mark app ready",
   "notes_max_bytes": 20000

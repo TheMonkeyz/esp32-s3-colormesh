@@ -214,6 +214,30 @@ static void cmd_wave(int argc, char **argv)
     ESP_LOGI(TAG, "ok wave %s", mesh_wave_name(k));
 }
 
+// "game": the round's state; "game start": a round from this board, as a tap on the game page; "game pick
+// rock|paper|scissors": the own pick during the countdown ("mesh: game ..." lines, then "mesh: game result ...")
+static void cmd_game(int argc, char **argv)
+{
+    static const char *const phases[] = { "idle", "count", "collect", "result" };
+    if (argc == 2 && !strcmp(argv[1], "start")) {
+        if (!mesh_game_start()) { ESP_LOGW(TAG, "error game: a round is running"); return; }
+        ESP_LOGI(TAG, "ok game start");
+        return;
+    }
+    if (argc == 3 && !strcmp(argv[1], "pick")) {
+        uint8_t p = rps_pick_from_name(argv[2]);
+        if (!p) { ESP_LOGW(TAG, "error game: expected rock|paper|scissors"); return; }
+        if (!mesh_game_pick(p)) { ESP_LOGW(TAG, "error game: no countdown running"); return; }
+        ESP_LOGI(TAG, "ok game pick %s", rps_pick_name(p));
+        return;
+    }
+    if (argc != 1) { ESP_LOGW(TAG, "error game: expected start | pick rock|paper|scissors"); return; }
+    static mesh_game_t g;
+    mesh_game_state(&g);
+    ESP_LOGI(TAG, "ok game %s left=%lu own=%s result=%s peers=%d", phases[g.phase], (unsigned long)g.ms_left,
+             rps_pick_name(g.own), rps_outcome_name(g.outcome), g.n);
+}
+
 // "9a", or a whole address "aa:bb:cc:dd:ee:9a": the origin id is the address's last (least significant) byte
 static void cmd_fwpull(int argc, char **argv)
 {
@@ -417,6 +441,7 @@ void console_init(void)
     testcon_register("shot", "shot [screen] [div]", cmd_shot);
     testcon_register("fwpull", "fwpull ADDR|ORIGIN", cmd_fwpull);
     testcon_register("wave", "wave centre|left|right|top|bottom", cmd_wave);
+    testcon_register("game", "game [start | pick rock|paper|scissors]", cmd_game);
     testcon_register("admin", "admin [on|off|key|new|selftest]", cmd_admin);
     testcon_register("trust", "trust [KEY|none]", cmd_trust);
 }

@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "wave.h"
+#include "rps.h"
 
 // The Bluetooth LE mesh: every board advertises its state (colour, holding, dev mode, version) and scans for the
 // others' (docs/RESEARCH-BLE.md). Any task may call these.
@@ -45,6 +46,23 @@ void mesh_start_wave(uint8_t kind);
 int mesh_waves(wave_t *out, int max, uint32_t now_ms);
 const char *mesh_wave_name(uint8_t kind);               // "centre", "left", "right", "top", "bottom", "?"
 uint8_t mesh_wave_kind(const char *name);               // the reverse; WAVE_NONE for anything else
+
+// ---- rock paper scissors (rps.h: the round rules) ----
+// The round travels in the advert (bytes 22-25); a board that hears a new round joins it ("mesh: game join ...").
+// At the end of the collect phase the picks heard decide the result ("mesh: game result ..."). Any task.
+#define MESH_GAME_PEERS 16
+typedef struct { uint8_t pick, r, g, b; } mesh_game_peer_t;
+typedef struct {
+    rps_phase_t phase;
+    uint32_t ms_left;                                   // to the reveal, during RPS_COUNT
+    uint8_t own;                                        // this board's pick (rps_pick_t)
+    rps_outcome_t outcome;                              // RPS_RESULT only, else RPS_OUT_NONE
+    int n;                                              // RPS_RESULT only: the peers that picked in this round
+    mesh_game_peer_t peers[MESH_GAME_PEERS];            // their picks and colours
+} mesh_game_t;
+bool mesh_game_start(void);                             // a new round from this board (false while one runs)
+bool mesh_game_pick(uint8_t pick);                      // the own pick, during the countdown only
+void mesh_game_state(mesh_game_t *out);
 
 // ---- radio control for the dev-mode firmware pull (mesh_fw.c). Call from a task, never from a touch/LVGL
 // handler: these talk to NimBLE directly (or wake the mesh task, which does). ----

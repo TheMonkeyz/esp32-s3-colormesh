@@ -20,6 +20,19 @@ X(T_NEAR,           "%d near  ·  %s",              "%d à portée  ·  %s")
 X(T_DEV,            "DEV",                         "DEV")
 X(T_ADMIN,          "ADMIN",                       "ADMIN")      // this board signs updates (secure updates)
 
+// Game page (rock paper scissors, the pager's last page): the words of the countdown come one a second
+X(T_GAME_TITLE,     "Rock paper scissors",         "Roche-papier-ciseaux")
+X(T_GAME_HINT,      "Tap to play",                 "Toucher pour jouer")
+X(T_GAME_PICK,      "Tap your pick",               "Toucher votre choix")
+X(T_GAME_AGAIN,     "Tap to play again",           "Toucher pour rejouer")
+X(T_GAME_ROCK,      "Rock",                        "Roche")
+X(T_GAME_PAPER,     "Paper",                       "Papier")
+X(T_GAME_SCISSORS,  "Scissors!",                   "Ciseaux!")
+X(T_GAME_WON,       "You win",                     "Vous gagnez")
+X(T_GAME_LOST,      "You lose",                    "Vous perdez")
+X(T_GAME_DRAW,      "Draw",                        "Égalité")
+X(T_GAME_LATE,      "Too late",                    "Trop tard")
+
 // System page
 X(T_SYSTEM,         "System",                      "Système")
 X(T_SYS_VERSION,    "Version %s",                  "Version %s")

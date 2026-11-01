@@ -9,7 +9,8 @@
 //   15 version kind (MP_VER_*) · 16 target origin (dev mode, else MP_TARGET_NONE) · 17 effect (MP_EFFECT_*) ·
 //   18 effect seq (bumped by the sender for each new effect it starts) · 19-21 the sender's wave colour B, R G B
 //   (0, 0, 0 = automatic: the receiver uses wave_opposite of 9-11; a chosen pure black is sent as #010101) ·
-//   22-29 reserved, zero.
+//   22-25 rock paper scissors (rps.h): 22 round seq (0 = no round), 23 the round's starter origin, 24 time left to
+//   the reveal in RPS_LEFT_UNIT_MS steps (0 after it), 25 the sender's pick (rps_pick_t) · 26-29 reserved, zero.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -45,8 +46,12 @@
 #define MP_ADV_SLOW_MS  100
 #define MP_ADV_FAST_BELOW_PEERS 6
 
-// b2r, b2g, b2b: the waves' colour B (bytes 19-21), 0, 0, 0 = automatic
-typedef struct mp_state { uint8_t origin, seq, ttl, flags, r, g, b, ver[4], target, effect, effect_seq, b2r, b2g, b2b; } mp_state_t;
+// b2r, b2g, b2b: the waves' colour B (bytes 19-21), 0, 0, 0 = automatic; game_*: the rock paper scissors round
+// (bytes 22-25). The game bytes are not part of mp_table_update's "changed": game_left moves every 100 ms.
+typedef struct mp_state {
+    uint8_t origin, seq, ttl, flags, r, g, b, ver[4], target, effect, effect_seq, b2r, b2g, b2b;
+    uint8_t game_seq, game_starter, game_left, game_pick;
+} mp_state_t;
 
 // The AD structure into buf: MP_AD_SIZE, or -1 if cap is smaller (or an argument is NULL)
 int  mp_encode(const mp_state_t *s, uint8_t *buf, int cap);
@@ -76,7 +81,8 @@ typedef struct {
 } mp_table_t;
 
 void mp_table_init(mp_table_t *t, uint32_t hold_expiry_ms, uint32_t peer_expiry_ms);   // 0 -> the defaults
-// One report from addr. True when the peer is new or its colour, colour B, flags, version, target or effect changed. A strictly
+// One report from addr. True when the peer is new or its colour, colour B, flags, version, target or effect changed (the
+// game bytes are stored, not compared). A strictly
 // older seq is ignored (last_ms and rssi are still refreshed) unless MP_SEQ_RESET_REPORTS come in a row; an equal
 // seq re-applies the state. A full table replaces the least recently heard peer.
 bool mp_table_update(mp_table_t *t, const uint8_t addr[6], const mp_state_t *st, int8_t rssi, uint32_t now_ms);
