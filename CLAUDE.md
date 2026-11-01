@@ -104,3 +104,10 @@ Add each preference the user states (gestures, wording, timing, look) with the d
 
 Board facts, API quirks, numbers measured on this hardware, test recipes: anything a future session would otherwise
 rediscover.
+- Boards (2026-10-31): A b8:1f:3f:c8:75:9a (origin 9a, COM5 on this PC), B 44:bd:8d:60:3c:76 (origin 76),
+  C 44:bd:8d:60:82:1a (origin 1a). The PC has one free USB port: B and C run from chargers during tests; only A's
+  log is visible. A board plugged alone showed up as COM8 (B) and COM3 (C).
+- Flood numbers: 20 ms non-connectable advertising accepted; 100/100 ms scan hears 61 % of two peers' events;
+  `CONFIG_BT_NIMBLE_HOST_QUEUE_CONG_CHECK` must stay off (one report per address per 2.7 s with it on).
+- Pull over Bluetooth: 21.4 KB/s receiving with the display on (1.1 MB in 51 s); `fwloop` self-test 115 KB/s on
+  the flash side. Internal RAM at app ready 135-137 KB free, largest block 64-66 KB.

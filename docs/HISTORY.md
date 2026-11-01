@@ -74,3 +74,12 @@ As [WORKFLOW.md](WORKFLOW.md), without the network parts:
   not built.
 - forge_net linked but never started (espforge backlog: `web_image_t` out of forge_net).
 - Effects (intensity, patterns, a shared clock) have 14 reserved bytes in the payload and no code.
+
+## 2026-10-31: first three-board run
+
+Board A (b8:1f:3f:c8:75:9a, COM5) on v0.1.0-rc.0, boards B (44:bd:8d:60:3c:76) and C (44:bd:8d:60:82:1a) flashed
+by cable with v0.1.0-fw.1 and powered from chargers. A heard both within 2.5 s of boot; holds on B and C arrived
+and mixed (blue + chartreuse = #80ffff) within 1 ms of the report; 61 reports/s of the 100/s sent. Forced pull
+`devmode on` + `fwpull 76` on A: linked in 0.4 s, 1,124,336 bytes in 51.0 s (21.4 KB/s, 0 resent), restart on
+ota_1, confirmed after 60 s. Tagged v0.1.0-rc.1. Open: pull rate (check PHY/DLE on the sender), a swipe sends
+a short hold, scan 50/50 ms not tried.
