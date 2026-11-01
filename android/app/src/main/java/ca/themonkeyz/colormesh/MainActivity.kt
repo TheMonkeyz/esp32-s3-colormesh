@@ -261,7 +261,7 @@ class MainActivity : Activity() {
             val t = now()
             mesh.tick(t)
             push()
-            radio?.clipTick()
+            radio?.clipTick(t)
             val n = mesh.table.peers.size
             near.text = resources.getQuantityString(R.plurals.near, n, n)
             if (mesh.ringing != shownRing) {

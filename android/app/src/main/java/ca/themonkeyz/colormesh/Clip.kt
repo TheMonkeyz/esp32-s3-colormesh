@@ -1,19 +1,20 @@
 package ca.themonkeyz.colormesh
 
-// A voice clip as the boards send it (main/adpcm.c, main/clip_chunks.c): IMA ADPCM at 16 kHz (4 bits a sample, low
-// nibble first), cut into chunks of CHUNK_DATA bytes, each in one manufacturer-data AD:
+// A voice clip as the boards send it (main/adpcm.c, main/clip_chunks.c): IMA ADPCM (4 bits a sample, low nibble
+// first), cut into chunks of CHUNK_DATA bytes, each in one manufacturer-data AD:
 //   [len] [0xFF] [0xFF 0xFF] 0x43 'V' origin id chunk(u16) total(u16) len(u32) crc32(u32) data...
-// The phone cannot send a periodic packet every 10 ms like a board (Android: 100 ms at best), so it puts several
-// ADs in one periodic packet (the boards split them, clip_frag_* in clip_chunks.c). Pure Kotlin; the JVM tests check
-// it against tests/fixtures/clip_vectors.txt, made by the firmware's C code.
+// Android sends one periodic packet per 100 ms at best (a board: 10 ms) and only one HCI command of data (one chunk)
+// while the train runs, so the phone records at 8 kHz (the user's choice over 16 kHz, 2026-11-01: a 5 s clip arrives
+// in about 9 s instead of 18) and says so in its beacon; the boards double the samples. Pure Kotlin; the JVM tests
+// check it against tests/fixtures/clip_vectors.txt, made by the firmware's C code.
 object Clip {
-    const val RATE = 16000
+    const val RATE = 8000
     const val MAX_MS = 5000
     const val MIN_MS = 300                 // shorter = a tap, not a clip (clip.c REC_MIN_MS)
     const val HDR = 20
     const val CHUNK_DATA = 224
     const val PKT_MAX = HDR + CHUNK_DATA
-    const val ROUNDS = 3
+    const val ROUNDS = 2                   // every chunk twice: the boards play as soon as the clip is whole
     const val PEAK_TARGET = 26000
     const val MAX_BOOST = 8
     private const val KIND = 'V'.code
@@ -102,9 +103,9 @@ object Clip {
 
     // The clip beacon: the extended advertising data of the phone's clip set. Android gives that set its own address
     // and SID, so a board cannot find the train from the phone's flood advert as it does for a board (address +
-    // SID 1); it syncs to the set that carries this AD instead: [8] [0xFF] [0xFF 0xFF] 0x43 'B' origin id tenths
+    // SID 1); it syncs to the set that carries this AD instead: [9] [0xFF] [0xFF 0xFF] 0x43 'B' origin id tenths kHz
     fun beacon(origin: Int, id: Int, ds: Int): ByteArray =
-        intArrayOf(8, 0xFF, 0xFF, 0xFF, MeshProto.PROTO, BEACON, origin, id, ds).map { it.toByte() }.toByteArray()
+        intArrayOf(9, 0xFF, 0xFF, 0xFF, MeshProto.PROTO, BEACON, origin, id, ds, RATE / 1000).map { it.toByte() }.toByteArray()
 
     // A quiet clip scaled up to PEAK_TARGET, at most MAX_BOOST times (clip.c)
     fun normalise(pcm: ShortArray): ShortArray {

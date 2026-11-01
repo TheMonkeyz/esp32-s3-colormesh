@@ -104,7 +104,7 @@ void mesh_set_voice_hooks(mesh_clip_cb_t clip, mesh_ring_cb_t ring, mesh_ring_cb
 // (clip_chunks.h clip_beacon_parse) in its extended advertising data. Called from the NimBLE host task, once per
 // (origin, clip id); copy and return.
 typedef void (*mesh_beacon_cb_t)(const uint8_t addr[6], uint8_t addr_type, uint8_t sid, uint8_t origin, uint8_t id,
-                                 uint8_t ds);
+                                 uint8_t ds, uint8_t khz);
 void mesh_set_beacon_hook(mesh_beacon_cb_t cb);
 // The clip's periodic set on instance 1 (clip.c): start with the periodic interval in 1.25 ms units, change the
 // periodic data (any length up to 247), stop. Synchronous, under the radio lock. 0 = ok, else a NimBLE rc.

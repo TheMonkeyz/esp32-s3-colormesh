@@ -189,15 +189,15 @@ static void beacon_report(const struct ble_gap_ext_disc_desc *d)
 {
     static uint16_t seen[4];                        // origin << 8 | id, + 1 (0 = empty)
     static int next;
-    uint8_t origin, id, ds;
+    uint8_t origin, id, ds, khz;
     mesh_beacon_cb_t cb = beacon_cb;
-    if (!cb || !clip_beacon_parse(d->data, d->length_data, &origin, &id, &ds)) return;
+    if (!cb || !clip_beacon_parse(d->data, d->length_data, &origin, &id, &ds, &khz)) return;
     uint16_t key = (uint16_t)((origin << 8 | id) + 1);
     for (int i = 0; i < 4; i++) if (seen[i] == key) return;
     seen[next] = key;
     next = (next + 1) % 4;
-    ESP_LOGI(TAG, "clip %u from phone %02x (sid %u), %u.%u s", id, origin, d->sid, ds / 10, ds % 10);
-    cb(d->addr.val, d->addr.type, d->sid, origin, id, ds);
+    ESP_LOGI(TAG, "clip %u from phone %02x (sid %u), %u.%u s, %u kHz", id, origin, d->sid, ds / 10, ds % 10, khz);
+    cb(d->addr.val, d->addr.type, d->sid, origin, id, ds, khz);
 }
 #endif
 

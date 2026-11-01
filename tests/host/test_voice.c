@@ -299,13 +299,25 @@ static void test_phone_clip(void)
     CHECK(!clip_next_ad(zero, sizeof(zero), &off, &ad, &ad_len), "a zero length ends the list");
 
     // the beacon, alone or after another AD
-    uint8_t beacon[12] = { 2, 0x01, 0x06, 8, 0xFF, 0xFF, 0xFF, 0x43, 'B', 0x3e, 9, 31 };
-    uint8_t o = 0, id = 0, ds = 0;
-    CHECK(clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds) && o == 0x3e && id == 9 && ds == 31, "beacon");
-    CHECK(clip_beacon_parse(beacon + 3, 9, &o, &id, &ds), "beacon alone");
+    uint8_t beacon[13] = { 2, 0x01, 0x06, 9, 0xFF, 0xFF, 0xFF, 0x43, 'B', 0x3e, 9, 31, 8 };
+    uint8_t o = 0, id = 0, ds = 0, khz = 0;
+    CHECK(clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds, &khz) && o == 0x3e && id == 9 && ds == 31 &&
+          khz == 8, "beacon, 8 kHz");
+    CHECK(clip_beacon_parse(beacon + 3, 10, &o, &id, &ds, &khz) && khz == 8, "beacon alone");
+    uint8_t old[9] = { 8, 0xFF, 0xFF, 0xFF, 0x43, 'B', 0x3e, 9, 31 };
+    CHECK(clip_beacon_parse(old, sizeof(old), &o, &id, &ds, &khz) && khz == 16, "a beacon without the rate: 16 kHz");
+    beacon[12] = 44;
+    CHECK(clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds, &khz) && khz == 16, "an unknown rate: 16 kHz");
     beacon[8] = 'V';
-    CHECK(!clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds), "not a beacon");
-    CHECK(!clip_beacon_parse(pkt, n, &o, &id, &ds), "clip chunks are not a beacon");
+    CHECK(!clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds, &khz), "not a beacon");
+    CHECK(!clip_beacon_parse(pkt, n, &o, &id, &ds, &khz), "clip chunks are not a beacon");
+
+    // 8 kHz to 16 kHz in place
+    int16_t up[8] = { 100, -100, 32767, 32767 };
+    clip_upsample2(up, 4);
+    static const int16_t want[8] = { 100, 0, -100, 16333, 32767, 32767, 32767, 32767 };
+    CHECK(!memcmp(up, want, sizeof(want)), "upsample: %d %d %d %d %d %d %d %d", up[0], up[1], up[2], up[3], up[4], up[5],
+          up[6], up[7]);
 }
 
 int main(void)

@@ -89,19 +89,31 @@ bool clip_next_ad(const uint8_t *p, size_t n, size_t *off, const uint8_t **ad, s
     return true;
 }
 
-bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds)
+bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds, uint8_t *khz)
 {
     size_t off = 0, len;
     const uint8_t *a;
     while (clip_next_ad(p, n, &off, &a, &len)) {
-        if (len == 9 && a[1] == 0xFF && a[2] == 0xFF && a[3] == 0xFF && a[4] == PROTO && a[5] == BEACON) {
+        if ((len == 9 || len == 10) && a[1] == 0xFF && a[2] == 0xFF && a[3] == 0xFF && a[4] == PROTO &&
+            a[5] == BEACON) {
             *origin = a[6];
             *id = a[7];
             *ds = a[8];
+            *khz = len == 10 && a[9] == 8 ? 8 : 16;
             return true;
         }
     }
     return false;
+}
+
+void clip_upsample2(int16_t *pcm, size_t n)
+{
+    for (size_t i = n; i-- > 0;) {                   // from the end: 2i >= i, nothing is read after it is written
+        int32_t next = i + 1 < n ? pcm[i + 1] : pcm[i];
+        int16_t x = pcm[i];
+        pcm[2 * i + 1] = (int16_t)((x + next) / 2);
+        pcm[2 * i] = x;
+    }
 }
 
 void clip_rx_begin(clip_rx_t *r, uint8_t origin, uint8_t id, uint8_t *buf)

@@ -111,9 +111,12 @@ class Radio(
     private var clipBusy = false
     var clipProgress = 0f
         private set
+    private var clipRefused = 0
 
-    // The longest periodic data this phone sends (several clip ADs per packet)
-    val maxClipData: Int get() = (adapter?.leMaximumAdvertisingDataLength ?: 251).coerceAtMost(Clip.MAX_PER_PKT * Clip.PKT_MAX)
+    // The longest periodic data this phone sends: a controller refuses new periodic data in fragments while the train
+    // runs (LE Set Periodic Advertising Data, Operation 3 only: COMMAND_DISALLOWED seen on a Pixel 8 Pro), so one
+    // HCI command's worth, 251 bytes: one clip chunk a packet
+    val maxClipData: Int get() = 251
     val canSendClips: Boolean get() = adapter?.isLePeriodicAdvertisingSupported == true &&
         adapter.isLeExtendedAdvertisingSupported
 
@@ -136,7 +139,7 @@ class Radio(
         }
         override fun onPeriodicAdvertisingDataSet(s: AdvertisingSet?, status: Int) {
             clipBusy = false
-            if (status != ADVERTISE_SUCCESS) Log.w(TAG, "periodic data status=$status")
+            if (status != ADVERTISE_SUCCESS) { Log.w(TAG, "periodic data status=$status"); clipRefused++ }
         }
         override fun onAdvertisingSetStopped(s: AdvertisingSet?) { clipSet = null }
     }
@@ -165,10 +168,13 @@ class Radio(
         adv.startAdvertisingSet(params, advData, null, per, pktData(pkts[0]), clipCb)
     }
 
-    // Called every 100 ms by the activity while a clip goes out: the next packet
-    fun clipTick() {
+    private var clipLastMs = 0L
+
+    // Called every frame by the activity while a clip goes out: the next packet once per periodic interval (100 ms)
+    fun clipTick(nowMs: Long) {
         val s = clipSet ?: return
-        if (clipBusy) return
+        if (clipBusy || nowMs - clipLastMs < 100) return
+        clipLastMs = nowMs
         if (clipNext >= clipPkts.size) { clipEnd(true); return }
         clipBusy = true
         s.setPeriodicAdvertisingData(pktData(clipPkts[clipNext]))
@@ -181,7 +187,8 @@ class Radio(
         clipSet = null
         val cb = clipDone
         clipDone = null
-        Log.i(TAG, "clip sent ok=$ok packets=$clipNext/${clipPkts.size}")
+        Log.i(TAG, "clip sent ok=$ok packets=$clipNext/${clipPkts.size} refused=$clipRefused")
+        clipRefused = 0
         cb?.invoke(ok)
     }
 

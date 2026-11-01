@@ -48,8 +48,13 @@ int clip_frag_add(clip_frag_t *f, const uint8_t *data, size_t n, int status);
 // end, on a zero length, or on an AD that runs past n.
 bool clip_next_ad(const uint8_t *p, size_t n, size_t *off, const uint8_t **ad, size_t *ad_len);
 // The Android app's clip beacon, in its clip set's extended advertising data (Android gives that set its own address
-// and SID, so a board cannot find it from the phone's flood advert): [8] [0xFF] [0xFF 0xFF] 0x43 'B' origin id tenths
-bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds);
+// and SID, so a board cannot find it from the phone's flood advert):
+//   [9] [0xFF] [0xFF 0xFF] 0x43 'B' origin id tenths kHz   (kHz: the clip's sample rate, 8 or 16; a beacon without
+// that byte, [8] ..., is 16). The phone records at 8 kHz: Android sends one chunk per 100 ms, 4x slower than a board.
+bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds, uint8_t *khz);
+// An 8 kHz clip played at 16 kHz: n samples at the start of pcm become 2n, each followed by the mean of it and the
+// next (the last repeated). In place (pcm holds 2n samples).
+void clip_upsample2(int16_t *pcm, size_t n);
 
 // Receiver side: one clip being assembled. buf holds CLIP_MAX_BYTES, bits CLIP_MAX_CHUNKS bits.
 typedef struct {
