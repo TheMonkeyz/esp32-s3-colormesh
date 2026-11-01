@@ -5,6 +5,10 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.2.0-rc.2 - 2026-11-01
+- Swipes are less touchy: a finger must move 28 px (was 10) before a swipe starts, so taps and holds with a
+  slight move stay taps and holds.
+
 ## v0.2.0-rc.1 - 2026-11-01
 - Waves: tap the main screen to send a bicolour wave to every board nearby (centre = rings growing outward;
   left, right, top or bottom = bands moving in from that side). Colour B is the opposite of your colour.

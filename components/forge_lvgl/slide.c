@@ -181,7 +181,7 @@ static int finger(int *x, int *y, int *errs)
 /* ---------- pager drags ---------- */
 
 #define MAX_PAGERS 6
-#define DRAG_PX 10                      // decided after 10 px, by the larger axis (as LVGL picks a scroll direction)
+#define DRAG_PX 28                      // decided after 28 px (was 10: a tap or a hold with a slight finger move became a swipe), by the larger axis
 static lv_obj_t *pagers[MAX_PAGERS];
 static int npagers;
 static struct { bool queued, vertical; lv_obj_t *pager; int x0, y0, x1, y1; } drag;
