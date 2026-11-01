@@ -195,9 +195,9 @@ static void swatch_tapped(lv_event_t *e)
     slide_change(1, false, to_main, NULL);   // the ring slides out to the left, main comes in from the right
 }
 
-// A long press (LVGL's 400 ms, the finger still: 10 px of movement would have made it a pager drag first) chooses
+// A long press (LVGL's 400 ms, the finger still: 28 px of movement would have made it a pager drag first) chooses
 // the waves' colour B: this swatch, or automatic again if this swatch already was colour B. The ring stays shown (the
-// dot is the answer); the touch is then LVGL's no more (lv_indev_wait_release), so its release is not also a tap.
+// dot is the answer); the touch is then dropped (slide_drop_touch): its release is not a tap, a move is no drag.
 static void swatch_long_pressed(lv_event_t *e)
 {
     if (!slide_tap_ok() || lv_screen_active() != scr_pager || pager_current(pager) != PG_PICK) return;
@@ -214,8 +214,9 @@ static void swatch_long_pressed(lv_event_t *e)
         mesh_set_color2(r, g, b, true);
     }
     pick_update();
-    lv_indev_t *in = lv_indev_active();
-    if (in) lv_indev_wait_release(in);          // the long press isn't also a tap
+    // The rest of this touch is the long press's: not a tap (LVGL waits for the release), and a finger that moves on
+    // starts no pager drag either (forge_lvgl's slide_drop_touch, espforge v0.7.0)
+    slide_drop_touch();
 }
 
 static void pick_create_page(lv_obj_t *pg)

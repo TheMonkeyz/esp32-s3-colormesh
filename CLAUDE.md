@@ -47,8 +47,8 @@ bug teaches something general; add the project-specific fact below.
 ## Working setup (this PC)
 
 - **No Wi-Fi at all.** Bluetooth LE between the boards (NimBLE, `docs/RESEARCH-BLE.md`); configuration and updates
-  over USB serial (the Pages site, the test console) or, in dev mode, from a peer over Bluetooth. forge_net is linked
-  only because forge_lvgl requires it; it is never started. So: no IP, no key, no HTTPS snapshots (`forge.json`
+  over USB serial (the Pages site, the test console) or, in dev mode, from a peer over Bluetooth. Since espforge
+  v0.7.0 neither forge_net nor dns_server is in the build (forge_lvgl no longer needs them). So: no IP, no key, no HTTPS snapshots (`forge.json`
   `no_net`); the harness runs with `--no-net`.
 - **Boards:** three Waveshare ESP32-S3-Touch-AMOLED-1.75 on a Windows 11 PC. Board A is on **COM5** (`forge.json`
   `port` empty = auto); the others get one-shot flashes (`flash_helper.py flash 60 --port COMx` while the helper is
@@ -56,7 +56,8 @@ bug teaches something general; add the project-specific fact below.
 - **ESP-IDF v5.5.4** at `C:\Espressif\esp-idf` (CI uses the same version, from `forge.json` `idf`). In PowerShell:
   `. C:\Espressif\esp-idf\export.ps1`, then
   `idf.py -B build\v55 -D SDKCONFIG=build\v55\sdkconfig build`. The framework comes from espforge at a tag
-  (`main/idf_component.yml`, v0.5.0); delete `dependencies.lock` when bumping it. From the Claude desktop app's
+  (`main/idf_component.yml`, v0.7.0-rc.2: forge_core, forge_lvgl, forge_audio, the board); delete `dependencies.lock`
+  when bumping it. From the Claude desktop app's
   shells, `%LOCALAPPDATA%` is redirected into the app's package folder and the component manager's git fetch fails
   ("'git init --bare' failed ... unable to get current working directory"): set
   `$env:IDF_COMPONENT_CACHE_PATH = "<checkout>\build\v55\cm_cache"` in that shell before `idf.py`.
