@@ -36,11 +36,12 @@ class ClipTest {
         assertEquals(179, chunks)
         val pkts = Clip.packets(0x3e, 5, clip, 1650)
         assertTrue(pkts.all { p -> p.size in 1..6 && p.sumOf { it.size } <= 1650 })
-        assertEquals(Clip.ROUNDS * chunks, pkts.sumOf { it.size })
-        assertEquals((Clip.ROUNDS * chunks + 5) / 6, pkts.size)
+        assertEquals(Clip.ROUNDS * chunks, pkts.drop(Clip.LEAD).sumOf { it.size })
+        assertEquals(Clip.LEAD + (Clip.ROUNDS * chunks + 5) / 6, pkts.size)
+        assertTrue(pkts.take(Clip.LEAD + 1).all { it === pkts[0] })      // the lead-in: the first packet held
         val one = Clip.packets(0x3e, 5, ByteArray(Clip.RATE * 5 / 2), 251)   // what the phone sends: 5 s at 8 kHz
         assertTrue(one.all { it.size == 1 && it[0].size <= 251 })
-        assertEquals(Clip.ROUNDS * 90, one.size)                    // 90 chunks a round: 9 s at 100 ms
+        assertEquals(Clip.LEAD + Clip.ROUNDS * 90, one.size)        // 90 chunks a round: 9 s at 100 ms
         // each AD: [len] FF FF FF 43 'V' (the radio swaps in company 0xFFFF - k)
         val ad = pkts[0][1]
         assertEquals(ad.size - 1, ad[0].toInt() and 0xFF)

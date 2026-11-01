@@ -14,7 +14,10 @@ object Clip {
     const val HDR = 20
     const val CHUNK_DATA = 224
     const val PKT_MAX = HDR + CHUNK_DATA
-    const val ROUNDS = 2                   // every chunk twice: the boards play as soon as the clip is whole
+    const val ROUNDS = 3                   // every chunk 3 times (2 lost one chunk in 52 on a board): the boards play
+                                           // as soon as the clip is whole
+    const val LEAD = 15                    // the first packet held this many intervals (1.5 s): the boards sync to the
+                                           // train only after they hear the beacon
     const val PEAK_TARGET = 26000
     const val MAX_BOOST = 8
     private const val KIND = 'V'.code
@@ -98,7 +101,8 @@ object Clip {
         val crc = crc32(clip)
         val per = (maxLen / PKT_MAX).coerceIn(1, MAX_PER_PKT)
         val all = (0 until rounds).flatMap { (0 until chunks(clip.size)).toList() }
-        return all.chunked(per).map { group -> group.map { pack(origin, id, clip, crc, it) } }
+        val pkts = all.chunked(per).map { group -> group.map { pack(origin, id, clip, crc, it) } }
+        return List(LEAD) { pkts[0] } + pkts
     }
 
     // The clip beacon: the extended advertising data of the phone's clip set. Android gives that set its own address

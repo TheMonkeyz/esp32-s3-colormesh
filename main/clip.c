@@ -263,6 +263,8 @@ static void send_clip(void)
 // ---- receive (sync_cb runs in the NimBLE host task) ----
 
 static clip_frag_t frag;                     // host task: a periodic packet in fragments (the Android app's are long)
+static volatile uint32_t rx_heard;           // chunk ADs heard for the clip being received (repeats included)
+static volatile int64_t rx_t0_us, rx_sync_us; // when the sync was asked for, when it came up (0 = not yet)
 
 // One whole periodic packet: every clip chunk AD in it (a board sends one, the Android app several)
 static void rx_packet(const uint8_t *data, size_t n)
@@ -274,6 +276,7 @@ static void rx_packet(const uint8_t *data, size_t n)
     while (!done && clip_next_ad(data, n, &off, &ad, &len)) {
         clip_pkt_t p;
         if (!clip_parse(ad, len, &p)) continue;
+        rx_heard++;
         done = clip_rx_add(&rx, &p);
         failed = !done && !rx.active;               // every chunk in but the CRC did not match
         if (failed) break;
@@ -289,7 +292,10 @@ static int sync_cb(struct ble_gap_event *e, void *arg)
     case BLE_GAP_EVENT_PERIODIC_SYNC:
         xSemaphoreTake(rx_lock, portMAX_DELAY);
         rx_pending = false;
-        if (e->periodic_sync.status == 0) rx_sync = e->periodic_sync.sync_handle;
+        if (e->periodic_sync.status == 0) {
+            rx_sync = e->periodic_sync.sync_handle;
+            rx_sync_us = esp_timer_get_time();
+        }
         xSemaphoreGive(rx_lock);
         if (e->periodic_sync.status) post(EV_RX_LOST);
         break;
@@ -349,7 +355,10 @@ static void rx_start(const ev_t *e)
     }
     memcpy(rx_rgb, e->rgb, 3);
     rx_khz = e->khz == 8 ? 8 : 16;
-    rx_deadline_us = esp_timer_get_time() + SYNC_WAIT_MS * 1000LL;
+    rx_heard = 0;
+    rx_sync_us = 0;
+    rx_t0_us = esp_timer_get_time();
+    rx_deadline_us = rx_t0_us + SYNC_WAIT_MS * 1000LL;
     st.receiving = true;
 }
 
@@ -456,7 +465,9 @@ static void handle(const ev_t *e)
         uint8_t id = rx.id, origin = rx.origin;
         xSemaphoreGive(rx_lock);
         rx_stop();
-        ESP_LOGI(TAG, "clip %u from %02x complete, %lu bytes, 0 holes", id, origin, (unsigned long)len);
+        ESP_LOGI(TAG, "clip %u from %02x complete, %lu bytes, 0 holes (%lu chunks heard of %u, synced after %lld ms, "
+                 "whole after %lld ms)", id, origin, (unsigned long)len, (unsigned long)rx_heard, clip_chunks(len),
+                 rx_sync_us ? (rx_sync_us - rx_t0_us) / 1000 : -1LL, (esp_timer_get_time() - rx_t0_us) / 1000);
         play_adpcm(rx_buf, len, rx_rgb, rx_khz);
         break;
     }
@@ -468,7 +479,8 @@ static void handle(const ev_t *e)
         xSemaphoreGive(rx_lock);
         if (whole) ESP_LOGW(TAG, "clip %u from %02x: CRC mismatch, dropped", id, origin);
         else if (miss == 0xFFFF) ESP_LOGW(TAG, "clip %u from %02x: no sync, dropped", id, origin);
-        else ESP_LOGW(TAG, "clip %u from %02x: %u chunks missing, dropped", id, origin, miss);
+        else ESP_LOGW(TAG, "clip %u from %02x: %u chunks missing, dropped (%lu heard, synced after %lld ms)", id, origin,
+                      miss, (unsigned long)rx_heard, rx_sync_us ? (rx_sync_us - rx_t0_us) / 1000 : -1LL);
         rx_stop();
         break;
     }
