@@ -5,7 +5,7 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
-## v0.5.0-rc.2 - 2026-11-01
+## v0.5.0-rc.3 - 2026-11-01
 - Rock paper scissors: the title at the top of the game page sits lower, clear of the coloured ring.
 
 ## v0.5.0-rc.1 - 2026-11-01

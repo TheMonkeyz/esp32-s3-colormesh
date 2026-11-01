@@ -44,6 +44,11 @@
   "note": "proposed by --update-baseline: check the limit and the direction",
   "ref": 5119
  },
+ "snapshot_ms.game": {
+  "max": 1400.0,
+  "note": "set by hand from `shot game 2` on board A (v0.5.0-rc.1, about 1000 ms); refine with --update-baseline",
+  "ref": 1000
+ },
  "snapshot_ms.main": {
   "max": 1486.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
