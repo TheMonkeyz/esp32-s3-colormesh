@@ -127,6 +127,51 @@ def hold_sends(ctx):
     ctx.note(f'hold on / off logged at {log_ms(on.string)} / {log_ms(off.string)} ms')
 
 
+SWIPE_HOLD_MS = 100                                    # a swipe from main: "hold off" at most this long after "on"
+
+
+def swipe_hold(lines, page):
+    """The hold a swipe from main sent, from the lines logged since the swipe: (ms from `mesh: hold on` to the next
+    `mesh: hold off`, whether that `hold off` came before `ui: page <page>`). (None, True) when the swipe sent no
+    hold; (None, False) when the hold never ended in these lines."""
+    on = off = settled = None
+    for i, line in enumerate(lines):
+        if on is None and re.search(r'mesh: hold on\b', line):
+            on = i
+        elif on is not None and off is None and re.search(r'mesh: hold off\b', line):
+            off = i
+        if settled is None and re.search(r'ui: page ' + re.escape(page) + r'\b', line):
+            settled = i
+    if on is None:
+        return None, True
+    if off is None:
+        return None, False
+    return log_ms(lines[off]) - log_ms(lines[on]), settled is None or off < settled
+
+
+@test('mesh')
+def swipe_no_hold(ctx):
+    """A swipe from main ends the hold its press sent at the drag's start (slide.c's drag hook: `ui: hold released
+    (drag)`): `mesh: hold off` within SWIPE_HOLD_MS of `mesh: hold on`, before the page settles, both ways (to system
+    and to the ring). Before the hook the hold lasted the whole slide (~0.4 s): the other boards flashed on every swipe."""
+    b = ctx.board
+    seen = []
+    for swipe, page in (('swipe left', NEXT), ('swipe right', PREV)):
+        go_home(ctx)
+        at = len(ctx.log.lines())
+        b.cmd(swipe)
+        ctx.log.wait(r'ui: page ' + page, 6, f'"{swipe}" from {HOME} settling on {page}', start=at)
+        time.sleep(0.5)                                    # the safety net's release, if the hook did not run
+        gap, before = swipe_hold(ctx.log.lines()[at:], page)
+        check(before, f'"{swipe}" from {HOME}: "mesh: hold off" ' +
+              ('never logged' if gap is None else f'only after "ui: page {page}" ({gap} ms after "hold on")'))
+        check(gap is None or gap <= SWIPE_HOLD_MS,
+              f'"{swipe}" from {HOME}: held {gap} ms (limit {SWIPE_HOLD_MS} ms)')
+        seen.append(f'{swipe} -> {page}: ' + ('no hold' if gap is None else f'held {gap} ms'))
+    go_home(ctx)
+    ctx.note('; '.join(seen))
+
+
 @test('mesh')
 def peers_seen(ctx):
     """`peers`: n=0 on a single board (passes with a note); else one `test: peer` line per peer, and `cfg` agrees."""

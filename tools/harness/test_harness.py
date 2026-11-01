@@ -657,6 +657,51 @@ class AppSuites(unittest.TestCase):
         self.assertFalse(hits('I (100) ble: advertising 20 ms'))
         self.assertTrue(hits('I (100) lvgl: draw buf: out of memory'))
 
+    # A swipe from main, as the board logs it with slide.c's drag hook (v0.1.0-rc.6-drag) and before it (rc.6: the
+    # safety net released the hold after the slide, ~240 ms of no finger later)
+    SWIPE_HOOK = ['I (10000) mesh: hold on', 'I (10021) ui: hold released (drag)', 'I (10021) mesh: hold off',
+                  'I (10203) slide: drag: first frame after 12 ms, 20 frames in 180 ms (111 fps), to next',
+                  'I (10204) ui: page system']
+    SWIPE_OLD = ['I (10000) mesh: hold on',
+                 'I (10203) slide: drag: first frame after 12 ms, 20 frames in 180 ms (111 fps), to next',
+                 'I (10204) ui: page system',
+                 'I (10440) ui: hold released (no finger for 236 ms, or the page changed)', 'I (10440) mesh: hold off']
+
+    def test_swipe_hold_parser(self):
+        self.assertEqual(app_suites.swipe_hold(self.SWIPE_HOOK, 'system'), (21, True))
+        self.assertEqual(app_suites.swipe_hold(self.SWIPE_OLD, 'system'), (440, False))
+        self.assertEqual(app_suites.swipe_hold(['I (5) ui: page pick'], 'pick'), (None, True))       # no hold sent
+        self.assertEqual(app_suites.swipe_hold(self.SWIPE_OLD[:3], 'system'), (None, False))      # never ended
+        # an earlier "hold off" (a test before) is not this swipe's; "page systemx" is not "page system"
+        lines = ['I (1) mesh: hold off'] + self.SWIPE_HOOK[:3] + ['I (9) ui: page systemx']
+        self.assertEqual(app_suites.swipe_hold(lines, 'system'), (21, True))
+        self.assertLessEqual(21, app_suites.SWIPE_HOLD_MS)
+        self.assertGreater(440 - 200, app_suites.SWIPE_HOLD_MS)
+
+    def run_swipes(self, old):
+        b = FakePager()
+        real = b.cmd
+
+        def cmd(line, expect=None, **kw):
+            r = real(line, expect, **kw)
+            if line in ('swipe left', 'swipe right'):
+                page = b.screen()
+                lines = self.SWIPE_OLD if old else self.SWIPE_HOOK
+                b.log.data += [re.sub(r'page system', 'page ' + page, l) for l in lines]
+            return r
+        b.cmd = cmd
+        return b, self.run_nav(app_suites.swipe_no_hold, b)
+
+    def test_swipe_no_hold_passes_with_the_drag_hook(self):
+        b, ctx = self.run_swipes(old=False)
+        self.assertEqual(b.sent, ['screen main', 'swipe left', 'screen main', 'swipe right', 'screen main'])
+        self.assertEqual(ctx.notes, ['swipe left -> system: held 21 ms; swipe right -> pick: held 21 ms'])
+
+    def test_swipe_no_hold_fails_on_the_old_firmware(self):
+        with self.assertRaises(Fail) as e:
+            self.run_swipes(old=True)
+        self.assertIn('only after "ui: page system"', str(e.exception))
+
 
 class LogWaits(unittest.TestCase):
     def test_ready_line_found_after_start_logs_wait(self):

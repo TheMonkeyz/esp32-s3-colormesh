@@ -1,0 +1,4 @@
+# espforge's forge_lvgl at v0.5.0, copied here to be edited (slide.c: slide_set_drag_hook), like components/board.
+# The component manager takes a local component for an override only when it has this file: without it the
+# managed copy (main/idf_component.yml, git v0.5.0) was built instead.
+dependencies: {}

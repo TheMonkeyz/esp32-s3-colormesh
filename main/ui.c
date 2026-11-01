@@ -290,6 +290,16 @@ static void hold_set(bool on)
 static void main_pressed(lv_event_t *e) { hold_set(true); }
 static void main_released(lv_event_t *e) { hold_set(false); }
 
+// slide.c: a press became a pager drag (10 px). A swipe that started on main had sent "hold on" with its press; LVGL
+// sends no PRESS_LOST then, so the hold ends here instead of in fast_tick after the slide (~0.4 s of colour on the other
+// boards for every swipe). Only a hold from a finger: the console's "hold on" stays.
+static void drag_started(lv_obj_t *pg, void *user)
+{
+    if (!ui_hold) return;
+    ESP_LOGI(TAG, "hold released (drag)");
+    hold_set(false);
+}
+
 static void main_create_page(lv_obj_t *pg)
 {
     lv_obj_add_flag(pg, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
@@ -421,8 +431,9 @@ static void system_create_page(lv_obj_t *pg)
 /* ---------- timers ---------- */
 
 // Every 50 ms: the main page's values (only what changed is touched), the pick outline, the hold safety net. A hold
-// is only ever on main: a swipe that starts there (its press already sent "hold on") ends it once it lands on the
-// ring or on system; a press on the ring or on system starts none (only pg_main has the press handlers).
+// is only ever on main: a swipe that starts there (its press already sent "hold on") ends it at the drag's start
+// (drag_started); this net is for a press lost otherwise, or a page change; a press on the ring or on system starts
+// none (only pg_main has the press handlers).
 static void fast_tick(lv_timer_t *t)
 {
     bool on_pager = lv_screen_active() == scr_pager;
@@ -530,6 +541,7 @@ void ui_init(void)
     set_text(m_title, "ColorMesh");
     set_text(m_body, tr(T_STARTING));
     lv_screen_load(scr_msg);
+    slide_set_drag_hook(drag_started, NULL);
     lv_timer_create(fast_tick, 50, NULL);
     lv_timer_create(slow_tick, 1000, NULL);
     display_unlock();

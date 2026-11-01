@@ -5,6 +5,9 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.1.0-rc.7 - 2026-10-31
+- A swipe no longer sends your colour: the hold ends the moment the finger starts a swipe (14 ms instead of 400).
+
 ## v0.1.0-rc.6 - 2026-10-31
 - The colour ring is a page of the main screen: swipe right from the main screen to open it, tap a colour, you
   are back on the main screen (pages: ring | main | system). No restart needed to change colour.
