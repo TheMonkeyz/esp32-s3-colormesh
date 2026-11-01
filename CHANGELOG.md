@@ -5,6 +5,14 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## Unreleased (feature/page-order) - 2026-11-01
+- New page order, left to right: colour choice, the mesh, voice and calls, rock paper scissors, system.
+- The colour choice, voice and game pages show the mesh behind them: the mixed colour while someone holds, and the
+  waves, smooth (about 50 frames a second) and without tearing; the waves keep moving while you swipe.
+- Texts on those pages are white with a black outline; the colour swatches, the talk disc and the Call button have a
+  black edge.
+- The Call button is easier to hit.
+
 ## v0.7.0-rc.2 - 2026-11-01
 - Everything in rc.1, and the phone's voice messages arrive whole: the app sends them a little slower and steadier
   (a 3 s message plays about 8 s after you let go, a 5 s one 13 to 18 s).

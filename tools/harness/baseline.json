@@ -79,12 +79,12 @@
   "note": "proposed by --update-baseline: check the limit and the direction",
   "ref": 55.0
  },
- "swipe_fps.main_to_system": {
+ "swipe_fps.main_to_voice": {
   "min": 43.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
   "ref": 55.0
  },
- "swipe_fps.system_to_main": {
+ "swipe_fps.voice_to_main": {
   "min": 44.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
   "ref": 55.0
@@ -94,12 +94,12 @@
   "note": "proposed by --update-baseline: check the limit and the direction",
   "ref": 41
  },
- "swipe_gap_max_ms.main_to_system": {
+ "swipe_gap_max_ms.main_to_voice": {
   "max": 58.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
   "ref": 42
  },
- "swipe_gap_max_ms.system_to_main": {
+ "swipe_gap_max_ms.voice_to_main": {
   "max": 44.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
   "ref": 32
@@ -109,12 +109,12 @@
   "note": "TE-locked swipes (59 Hz) count fewer raw frames, so LVGL repaints weigh more (2026-10-31)",
   "ref": 3.0
  },
- "swipe_render_avg_ms.main_to_system": {
+ "swipe_render_avg_ms.main_to_voice": {
   "max": 4.5,
   "note": "TE-locked swipes (59 Hz) count fewer raw frames, so LVGL repaints weigh more (2026-10-31)",
   "ref": 3.0
  },
- "swipe_render_avg_ms.system_to_main": {
+ "swipe_render_avg_ms.voice_to_main": {
   "max": 4.5,
   "note": "TE-locked swipes (59 Hz) count fewer raw frames, so LVGL repaints weigh more (2026-10-31)",
   "ref": 3.0

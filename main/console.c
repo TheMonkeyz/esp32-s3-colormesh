@@ -314,7 +314,7 @@ static void cmd_trust(int argc, char **argv)
  * "shot [screen] [div]": a screen (the registry's names; default "shown", the one on the display) sent over USB as
  * base64 RGB565, every div-th pixel of every div-th row (div 1..4, default 2): "SHOT name w h", one "S:" line per
  * row, "SHOTEND". tools/shot.py turns a log into PNGs. From esp32-s3-meteobus (port/esp32-p4, main/console.c).
- * "shot wave [div]": the wave frame the main page shows now (the screens' snapshot is LVGL's page, not the raw frames
+ * "shot wave [div]": the wave frame shown now (main, or pick / voice / game with the page's picture on top) (the screens' snapshot is LVGL's page, not the raw frames
  * a wave is drawn with), computed by the same wave_fill with the same inputs as ui.c's wave loop.
  * Straight to the USB driver (testcon's): through the log it would take far longer. */
 static void usb_line(const char *s, size_t n)
@@ -359,6 +359,8 @@ static void shot_task(void *arg)
             for (int y = 0; y < DISP_H; y += 32)
                 wave_fill(wave_px + (size_t)y * DISP_W, y, DISP_H - y < 32 ? DISP_H - y : 32, ws, nw, now, hr, hg, hb,
                           hold, c->r, c->g, c->b);
+            for (int y = 0; y < DISP_H; y += 32)          // the page on top, as the loop draws it (pick, voice, game)
+                ui_wave_layer(wave_px + (size_t)y * DISP_W, y, DISP_H - y < 32 ? DISP_H - y : 32);
             display_unlock();
             for (size_t i = 0; i < (size_t)DISP_W * DISP_H; i++)   // panel order -> RGB565 little-endian
                 wave_px[i] = (uint16_t)(wave_px[i] << 8 | wave_px[i] >> 8);

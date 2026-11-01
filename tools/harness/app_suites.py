@@ -27,8 +27,8 @@ APP_WATCH = [
 ]
 METRIC_SUITES = [('drag_first_frame_ms', 'perf'), ('swipe_', 'perf')]
 
-PAGES = ['pick', 'main', 'system']                     # the pager's pages, left to right: ring | main | system
-PREV, HOME, NEXT = PAGES                               # a swipe right on main opens the ring, a swipe left system
+PAGES = ['pick', 'main', 'voice', 'game', 'system']   # the pager's pages, left to right (the user's order, v0.6.0)
+PREV, HOME, NEXT = PAGES[:3]                           # a swipe right on main opens the ring, a swipe left voice
 RING_R = 180                                           # the pick page: 12 swatches on a ring around the centre,
 RED_SWATCH = (SCREEN_C[0], SCREEN_C[1] - RING_R)       # hue 0 = red at the top, clockwise every 30 degrees
 RED = '#ff0000'
@@ -140,8 +140,8 @@ def pick_long_press(ctx):
 
 
 @test('navigation')
-def swipe_to_system(ctx):
-    """A swipe left from main shows system; a swipe right comes back."""
+def swipe_to_voice(ctx):
+    """A swipe left from main shows the voice page; a swipe right comes back."""
     b = ctx.board
     go_home(ctx)
     b.cmd('swipe left')
@@ -220,7 +220,7 @@ def swipe_hold(lines, page):
 @test('mesh')
 def swipe_no_hold(ctx):
     """A swipe from main ends the hold its press sent at the drag's start (slide.c's drag hook: `ui: hold released
-    (drag)`): `mesh: hold off` within SWIPE_HOLD_MS of `mesh: hold on`, before the page settles, both ways (to system
+    (drag)`): `mesh: hold off` within SWIPE_HOLD_MS of `mesh: hold on`, before the page settles, both ways (to voice
     and to the ring). Before the hook the hold lasted the whole slide (~0.4 s): the other boards flashed on every swipe."""
     b = ctx.board
     seen = []
@@ -430,7 +430,7 @@ def measure(ctx, name, action, settle=1.0):
 
 @test('perf')
 def page_swipes(ctx):
-    """main -> system and back by swipes, then a slow finger-following drag: fps, the worst gap, the render average
+    """main -> voice and back by swipes, then a slow finger-following drag: fps, the worst gap, the render average
     and the drag's first frame against the baseline."""
     b = ctx.board
     go_home(ctx)

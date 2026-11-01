@@ -41,8 +41,8 @@ $(OUT)/test_mesh: test_mesh.c $(MAIN)/mesh_proto.c $(MAIN)/mesh_proto.h check.h 
 	    -I$(MAIN) -o $@ test_mesh.c $(MAIN)/mesh_proto.c
 # wave.c is pure C99 too (libm only for its tables); test_wave prints frame times under the sanitizers, and
 # `make bench` builds it optimised without them for a fairer time (still a PC, not the ESP32-S3)
-WAVE_SRC := test_wave.c $(MAIN)/wave.c
-WAVE_DEP := $(WAVE_SRC) $(MAIN)/wave.h $(MAIN)/mesh_proto.h check.h
+WAVE_SRC := test_wave.c $(MAIN)/wave.c $(MAIN)/layer.c
+WAVE_DEP := $(WAVE_SRC) $(MAIN)/wave.h $(MAIN)/layer.h $(MAIN)/mesh_proto.h check.h
 $(OUT)/test_wave: $(WAVE_DEP) | $(OUT)
 	$(CC) -std=c99 -pedantic -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined 	    -I$(MAIN) -o $@ $(WAVE_SRC) -lm
 $(OUT)/bench_wave: $(WAVE_DEP) | $(OUT)

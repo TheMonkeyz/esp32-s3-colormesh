@@ -1,0 +1,508 @@
+<meta charset="utf-8">
+<title>ColorMesh Atlas</title>
+<meta name="description" content="Zoomable architecture diagrams of ColorMesh (three boards sharing colours over Bluetooth LE), read from docs/DIAGRAMS.md.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: a drafting table. The diagram fills a dotted canvas you pan and zoom; a reading panel on the right
+   (below on phones) carries the level's text, its zoom-in links and the map of every level. */
+:root {
+  --paper: #f2f5f4;
+  --panel: #fbfcfc;
+  --ink: #16202a;
+  --muted: #586572;
+  --rule: #cdd6d8;
+  --dot: #cdd6d7;
+  --accent: #b4521a;
+  --accent-ink: #ffffff;
+  --accent-soft: #f6e3d6;
+  --node: #ffffff;
+  --cluster: #e6eeee;
+  --edge: #6b7a84;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --step--1: 0.8125rem;
+  --step-0: 0.9375rem;
+  --step-1: 1.125rem;
+  --step-2: 1.5rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e1418; --panel: #121a1f; --ink: #e2e8eb; --muted: #94a2ab; --rule: #2a3840; --dot: #22313a;
+    --accent: #f0995c; --accent-ink: #1a0f08; --accent-soft: #43271a; --node: #16212a; --cluster: #111b21;
+    --edge: #8394a0; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0e1418; --panel: #121a1f; --ink: #e2e8eb; --muted: #94a2ab; --rule: #2a3840; --dot: #22313a;
+  --accent: #f0995c; --accent-ink: #1a0f08; --accent-soft: #43271a; --node: #16212a; --cluster: #111b21;
+  --edge: #8394a0; color-scheme: dark;
+}
+
+html, body { height: 100%; }
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: var(--step-0);
+  line-height: 1.5; display: flex; flex-direction: column; min-height: 0;
+}
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.top {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 20px;
+  padding: 14px 20px 12px; border-bottom: 1px solid var(--rule); background: var(--panel);
+}
+.brand { font-family: var(--font-display); font-weight: 600; font-size: var(--step-1); letter-spacing: 0.01em; margin: 0; }
+.brand span { color: var(--muted); font-weight: 500; }
+.crumbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.crumbs li { display: flex; gap: 6px; align-items: baseline; }
+.crumbs li + li::before { content: "›"; color: var(--muted); }
+.crumbs button { all: unset; cursor: pointer; color: var(--accent); border-radius: 3px; }
+.crumbs button:hover { text-decoration: underline; }
+.crumbs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.crumbs [aria-current] { color: var(--ink); font-weight: 600; }
+
+.main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0; }
+
+.canvas {
+  position: relative; overflow: hidden; min-height: 0; cursor: grab; touch-action: none;
+  background-color: var(--paper);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+}
+.canvas.dragging { cursor: grabbing; }
+.stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.stage.animate { transition: transform 300ms cubic-bezier(.3,.7,.2,1), opacity 300ms ease; }
+.stage svg { display: block; overflow: visible; }
+
+.level-tag {
+  position: absolute; left: 16px; top: 14px; display: flex; flex-direction: column; gap: 2px; pointer-events: none;
+}
+.level-tag .lvl { font-family: var(--font-mono); font-size: var(--step--1); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+.level-tag h2 { font-family: var(--font-display); font-weight: 600; font-size: var(--step-2); line-height: 1.15; margin: 0; text-wrap: balance; max-width: 22ch; }
+
+.tools { position: absolute; right: 14px; bottom: 14px; display: flex; gap: 6px; }
+.tools button, .up {
+  font: 500 var(--step--1)/1 var(--font-body); color: var(--ink); background: var(--panel);
+  border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; cursor: pointer; min-width: 34px;
+}
+.tools button:hover, .up:hover { border-color: var(--accent); color: var(--accent); }
+.up { position: absolute; left: 16px; bottom: 14px; }
+
+.hint {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); font-size: var(--step--1); color: var(--muted);
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 999px; padding: 4px 12px; white-space: nowrap;
+}
+
+/* Boxes that open a deeper level. */
+.canvas g.node.zoomable { cursor: pointer; }
+.canvas g.node.zoomable :is(rect, polygon, circle, path, ellipse) { stroke: var(--accent) !important; stroke-width: 2px !important; }
+.canvas g.node.zoomable:hover :is(rect, polygon, circle, path, ellipse),
+.canvas g.node.zoomable:focus-visible :is(rect, polygon, circle, path, ellipse) { fill: var(--accent-soft) !important; stroke-width: 3px !important; }
+.canvas g.node.zoomable:focus { outline: none; }
+.badge circle { fill: var(--accent) !important; stroke: var(--paper) !important; stroke-width: 2px !important; }
+.badge path { stroke: var(--accent-ink) !important; stroke-width: 1.8px !important; fill: none !important; }
+
+.panel { border-left: 1px solid var(--rule); background: var(--panel); overflow: auto; min-height: 0; padding: 20px 22px 32px; display: flex; flex-direction: column; gap: 22px; }
+.panel h3 { font-family: var(--font-mono); font-weight: 500; font-size: var(--step--1); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.prose { min-width: 0; }
+.prose > :first-child { margin-top: 0; }
+.prose p, .prose ul { margin: 0 0 0.8em; }
+.prose code { font-family: var(--font-mono); font-size: 0.86em; background: var(--cluster); border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; }
+.prose table { border-collapse: collapse; width: 100%; font-size: var(--step--1); }
+.prose .table-wrap { overflow-x: auto; }
+.prose th, .prose td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+.prose th { font-weight: 600; }
+
+.zooms { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.zooms button {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px;
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 4px; padding: 8px 10px; background: var(--paper);
+}
+.zooms button:hover { background: var(--accent-soft); }
+.zooms button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.zooms .to { font-weight: 600; }
+.zooms .from { grid-column: 1; font-size: var(--step--1); color: var(--muted); }
+.zooms .id { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-family: var(--font-mono); font-size: var(--step--1); color: var(--muted); }
+.none { color: var(--muted); font-style: italic; margin: 0; }
+
+.map, .map ul { list-style: none; margin: 0; padding: 0; }
+.map ul { padding-left: 16px; border-left: 1px solid var(--rule); margin-left: 6px; }
+.map button { all: unset; cursor: pointer; display: block; padding: 3px 6px; border-radius: 4px; }
+.map button:hover { background: var(--accent-soft); }
+.map button:focus-visible { outline: 2px solid var(--accent); }
+.map button[aria-current] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+.legend { display: grid; gap: 4px; font-size: var(--step--1); color: var(--muted); }
+.legend span { font-family: var(--font-mono); color: var(--ink); }
+
+.fallback { max-width: 60ch; padding: 32px 20px; display: grid; gap: 12px; }
+.fallback code { font-family: var(--font-mono); background: var(--cluster); padding: 2px 6px; border-radius: 4px; }
+
+@media (max-width: 860px) {
+  html, body { height: auto; }
+  .main { flex: none; grid-template-columns: minmax(0, 1fr); }
+  .canvas { height: 62vh; min-height: 360px; }
+  .panel { border-left: 0; border-top: 1px solid var(--rule); overflow: visible; }
+  .hint { display: none; }
+  .level-tag h2 { font-size: var(--step-1); }
+}
+@media (prefers-reduced-motion: reduce) { .stage.animate { transition: none; } }
+</style>
+
+<header class="top">
+  <p class="brand">ColorMesh <span>atlas</span></p>
+  <nav aria-label="Level path"><ol class="crumbs" id="crumbs"></ol></nav>
+</header>
+
+<div class="main" id="main">
+  <section class="canvas" id="canvas" aria-label="Diagram. Drag to move, scroll or pinch to zoom.">
+    <div class="stage" id="stage"></div>
+    <div class="level-tag"><span class="lvl" id="lvl"></span><h2 id="heading">Loading the diagrams…</h2></div>
+    <button class="up" id="up" type="button" hidden>↑ Up a level</button>
+    <p class="hint" id="hint">Click a box marked ⊕ to zoom in · drag to move · scroll to zoom · Esc goes up</p>
+    <div class="tools">
+      <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+      <button type="button" id="zoom-fit" aria-label="Fit the diagram">Fit</button>
+      <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+    </div>
+  </section>
+
+  <aside class="panel" id="panel">
+    <div class="prose" id="prose"></div>
+    <div>
+      <h3>Zoom in</h3>
+      <ul class="zooms" id="zooms"></ul>
+    </div>
+    <div>
+      <h3>All levels</h3>
+      <ul class="map" id="map"></ul>
+    </div>
+    <div class="legend">
+      <h3>Reading the shapes</h3>
+      <div><span>⊕ box</span> opens a deeper diagram</div>
+      <div><span>cylinder</span> data or storage</div>
+      <div><span>circle</span> people, or the air</div>
+      <div><span>dotted line</span> control or a rule, not data</div>
+      <div><span>sequence</span> messages in time order, top to bottom</div>
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.15.0/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/18.0.14/lib/marked.umd.min.js"></script>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("canvas"), stage = $("stage");
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let sections = [], bySlug = new Map(), parent = new Map(), depth = new Map(), current = null, renderSeq = 0;
+
+  // ---- Reading DIAGRAMS.md: the same rules tools/check_diagrams.py checks. -------------------------------------
+  const slug = (t) => t.toLowerCase().replace(/[^a-z0-9 _-]/g, "").replace(/ /g, "-");
+  const zoomLine = /^- (.*)\(`([\w-]+)`\) → \[([^\]]+)\]\(#([\w-]+)\)\s*$/gm;
+
+  // The map of levels at the top of DIAGRAMS.md: a nested list of links. It decides each level's parent.
+  let mapParents = new Map();
+  function parseMap(intro) {
+    mapParents = new Map();
+    const stack = [];
+    for (const m of intro.matchAll(/^( *)- \[[^\]]+\]\(#([\w-]+)\)\s*$/gm)) {
+      const d = m[1].length / 2;
+      stack.length = d; stack[d] = m[2];
+      if (d > 0 && stack[d - 1]) mapParents.set(m[2], stack[d - 1]);
+    }
+  }
+
+  function parse(md) {
+    const parts = ("\n" + md.replace(/\r/g, "")).split("\n## ");
+    parseMap(parts[0]);
+    return parts.slice(1).map((p) => {
+      const nl = p.indexOf("\n");
+      const title = p.slice(0, nl).trim();
+      let body = p.slice(nl + 1);
+      const m = body.match(/```mermaid\n([\s\S]*?)```/);
+      const zooms = [...body.matchAll(zoomLine)].map((z) => ({ label: z[1].trim(), box: z[2], title: z[3], slug: z[4] }));
+      const prose = body.replace(/```mermaid\n[\s\S]*?```/, "").replace(zoomLine, "").replace(/\*\*Zoom in:\*\*\s*/g, "").trim();
+      return { title, slug: slug(title), diagram: m ? m[1] : "", zooms, prose };
+    });
+  }
+
+  function index() {
+    bySlug = new Map(sections.map((s) => [s.slug, s]));
+    parent = new Map(); depth = new Map([[sections[0].slug, 0]]);
+    for (const [child, p] of mapParents) if (bySlug.has(child) && bySlug.has(p)) parent.set(child, p);
+    // Anything the map leaves out hangs under the first level that zooms into it.
+    const queue = [sections[0].slug], seen = new Set(queue);
+    while (queue.length) {
+      const s = bySlug.get(queue.shift());
+      for (const z of s.zooms) {
+        if (!bySlug.has(z.slug) || seen.has(z.slug)) continue;
+        seen.add(z.slug); queue.push(z.slug);
+        if (!parent.has(z.slug) && z.slug !== sections[0].slug) parent.set(z.slug, s.slug);
+      }
+    }
+    for (const s of sections) depth.set(s.slug, path(s.slug).length - 1);
+  }
+
+  const path = (s) => { const out = [s]; while (parent.has(out[0])) out.unshift(parent.get(out[0])); return out; };
+
+  // ---- Mermaid, themed from the page's own tokens. ------------------------------------------------------------
+  function themeVars() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (n) => cs.getPropertyValue(n).trim();
+    return {
+      fontFamily: v("--font-body"), fontSize: "15px",
+      background: v("--paper"), primaryColor: v("--node"), primaryTextColor: v("--ink"), primaryBorderColor: v("--edge"),
+      secondaryColor: v("--node"), tertiaryColor: v("--cluster"), lineColor: v("--edge"), textColor: v("--ink"),
+      clusterBkg: v("--cluster"), clusterBorder: v("--rule"), edgeLabelBackground: v("--paper"), titleColor: v("--muted"),
+      nodeTextColor: v("--ink"),
+    };
+  }
+  function setupMermaid() {
+    mermaid.initialize({ startOnLoad: false, theme: "base", themeVariables: themeVars(), securityLevel: "strict",
+      flowchart: { htmlLabels: true, curve: "basis", padding: 14, nodeSpacing: 46, rankSpacing: 58 } });
+  }
+
+  // ---- Pan and zoom. ------------------------------------------------------------------------------------------
+  const view = { x: 0, y: 0, k: 1, w: 1, h: 1 };
+  const apply = () => { stage.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`; };
+  const clamp = (k) => Math.min(4, Math.max(0.2, k));
+  function fitView() {
+    const cw = canvas.clientWidth, ch = canvas.clientHeight, top = 70, bottom = 56;
+    const k = Math.min(1.5, (cw - 48) / view.w, (ch - top - bottom) / view.h);
+    view.k = clamp(k); view.x = (cw - view.w * view.k) / 2; view.y = top + (ch - top - bottom - view.h * view.k) / 2;
+  }
+  function zoomAt(px, py, factor) {
+    const k = clamp(view.k * factor), r = k / view.k;
+    view.x = px - (px - view.x) * r; view.y = py - (py - view.y) * r; view.k = k; apply();
+  }
+  function animateTo(fn, ms = 300) {
+    if (reduceMotion) { fn(); apply(); return Promise.resolve(); }
+    stage.classList.add("animate"); fn(); apply();
+    return new Promise((res) => setTimeout(() => { stage.classList.remove("animate"); res(); }, ms));
+  }
+
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+  }, { passive: false });
+
+  const pointers = new Map(); let dragged = false, pinch = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    dragged = false;
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) };
+    }
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    const prev = pointers.get(e.pointerId); if (!prev) return;
+    const cur = { x: e.clientX, y: e.clientY }; pointers.set(e.pointerId, cur);
+    if (pointers.size === 2 && pinch) {
+      const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y), r = canvas.getBoundingClientRect();
+      zoomAt((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, d / pinch.d); pinch.d = d; dragged = true; return;
+    }
+    const dx = cur.x - prev.x, dy = cur.y - prev.y;
+    if (Math.abs(dx) + Math.abs(dy) > 0) {
+      if (!dragged && Math.hypot(dx, dy) < 3) return;
+      dragged = true; canvas.classList.add("dragging"); view.x += dx; view.y += dy; apply();
+    }
+  });
+  const release = (e) => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; canvas.classList.remove("dragging"); };
+  canvas.addEventListener("pointerup", release); canvas.addEventListener("pointercancel", release);
+
+  const centre = () => [canvas.clientWidth / 2, canvas.clientHeight / 2];
+  $("zoom-in").onclick = () => animateTo(() => { const [x, y] = centre(); zoomAt(x, y, 1.35); });
+  $("zoom-out").onclick = () => animateTo(() => { const [x, y] = centre(); zoomAt(x, y, 1 / 1.35); });
+  $("zoom-fit").onclick = () => animateTo(fitView);
+  $("up").onclick = () => goUp();
+
+  // ---- Showing a level. ---------------------------------------------------------------------------------------
+  function nodeId(g) {
+    if (g.dataset.id) return g.dataset.id;
+    const m = /flowchart-(.+)-\d+$/.exec(g.id || "");
+    return m ? m[1] : null;
+  }
+
+  function addBadge(g) {
+    const box = g.getBBox();
+    const ns = "http://www.w3.org/2000/svg";
+    const badge = document.createElementNS(ns, "g");
+    badge.setAttribute("class", "badge");
+    badge.setAttribute("transform", `translate(${box.x + box.width - 2}, ${box.y + 2})`);
+    const c = document.createElementNS(ns, "circle"); c.setAttribute("r", "9");
+    const p = document.createElementNS(ns, "path"); p.setAttribute("d", "M-4.5 0H4.5M0 -4.5V4.5");
+    badge.append(c, p); g.append(badge);
+  }
+
+  async function render(slugName, { from } = {}) {
+    const s = bySlug.get(slugName) || sections[0];
+    const seq = ++renderSeq;
+    current = s;
+    const chain = path(s.slug);
+    $("lvl").textContent = `Level ${depth.get(s.slug) ?? 0}${chain.length > 1 ? " · in " + bySlug.get(chain[chain.length - 2]).title : ""}`;
+    $("heading").textContent = s.title;
+    document.title = `${s.title} · ColorMesh Atlas`;
+    $("up").hidden = !parent.has(s.slug);
+    renderCrumbs(chain); renderPanel(s); renderMap();
+
+    let svg;
+    try {
+      ({ svg } = await mermaid.render(`d${seq}`, s.diagram));
+    } catch (err) {
+      stage.innerHTML = `<p style="padding:24px;max-width:50ch">This diagram doesn't parse: ${String(err.message || err).replace(/</g, "&lt;")}</p>`;
+      return;
+    }
+    if (seq !== renderSeq) return;
+    stage.style.opacity = from ? "0" : "1";
+    stage.innerHTML = svg;
+    const el = stage.querySelector("svg");
+    const vb = el.viewBox.baseVal;
+    view.w = vb && vb.width ? vb.width : el.getBBox().width; view.h = vb && vb.height ? vb.height : el.getBBox().height;
+    el.setAttribute("width", view.w); el.setAttribute("height", view.h); el.style.maxWidth = "none";
+
+    const targets = new Map(s.zooms.filter((z) => bySlug.has(z.slug)).map((z) => [z.box, z]));
+    for (const g of el.querySelectorAll("g.node")) {
+      const z = targets.get(nodeId(g)); if (!z) continue;
+      g.classList.add("zoomable"); g.setAttribute("tabindex", "0"); g.setAttribute("role", "button");
+      g.setAttribute("aria-label", `Zoom into ${z.title}`);
+      const t = document.createElementNS("http://www.w3.org/2000/svg", "title"); t.textContent = `Zoom into: ${z.title}`; g.prepend(t);
+      addBadge(g);
+      g.addEventListener("click", (e) => { if (dragged) return; e.stopPropagation(); zoomInto(g, z.slug); });
+      g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); zoomInto(g, z.slug); } });
+    }
+
+    fitView();
+    if (from && !reduceMotion) {
+      const [cx, cy] = centre(), k0 = view.k;
+      view.k = k0 * 0.6; view.x = cx - (cx - view.x) * 0.6; view.y = cy - (cy - view.y) * 0.6; apply();
+      void stage.offsetWidth;
+      await animateTo(() => { fitView(); stage.style.opacity = "1"; });
+    } else { apply(); stage.style.opacity = "1"; }
+  }
+
+  async function zoomInto(g, target) {
+    const r = g.getBoundingClientRect(), c = canvas.getBoundingClientRect();
+    const px = r.left + r.width / 2 - c.left, py = r.top + r.height / 2 - c.top;
+    await animateTo(() => {
+      const [cx, cy] = centre(), f = 2.4, k = view.k * f;
+      view.x = cx - (px - view.x) * f; view.y = cy - (py - view.y) * f; view.k = k; stage.style.opacity = "0";
+    }, 260);
+    go(target, { from: "in" });
+  }
+  function goUp() { if (current && parent.has(current.slug)) go(parent.get(current.slug), { from: "out" }); }
+
+  function go(slugName, opts = {}) {
+    if (location.hash !== "#" + slugName) {
+      pendingOpts = opts; location.hash = slugName; // hashchange renders it
+    } else render(slugName, opts);
+  }
+  let pendingOpts = null;
+  addEventListener("hashchange", () => { const o = pendingOpts || {}; pendingOpts = null; render(location.hash.slice(1), o); });
+
+  function button(text, onClick, current) {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.onclick = onClick;
+    if (current) b.setAttribute("aria-current", "page"); return b;
+  }
+
+  function renderCrumbs(chain) {
+    const ol = $("crumbs"); ol.replaceChildren();
+    chain.forEach((sl, i) => {
+      const li = document.createElement("li"), last = i === chain.length - 1;
+      if (last) { const span = document.createElement("span"); span.textContent = bySlug.get(sl).title; span.setAttribute("aria-current", "page"); li.append(span); }
+      else li.append(button(bySlug.get(sl).title, () => go(sl, { from: "out" })));
+      ol.append(li);
+    });
+  }
+
+  function renderPanel(s) {
+    const prose = $("prose");
+    prose.innerHTML = marked.parse(s.prose, { gfm: true });
+    for (const t of prose.querySelectorAll("table")) { const w = document.createElement("div"); w.className = "table-wrap"; t.replaceWith(w); w.append(t); }
+    for (const a of prose.querySelectorAll('a[href^="#"]')) {
+      a.addEventListener("click", (e) => { e.preventDefault(); go(a.getAttribute("href").slice(1), { from: "in" }); });
+    }
+    for (const a of prose.querySelectorAll('a[href^="http"]')) { a.target = "_blank"; a.rel = "noopener"; }
+    const ul = $("zooms"); ul.replaceChildren();
+    const usable = s.zooms.filter((z) => bySlug.has(z.slug));
+    if (!usable.length) { const p = document.createElement("p"); p.className = "none"; p.textContent = "Nothing deeper here. Go up a level, or pick another from the map below."; ul.append(p); return; }
+    for (const z of usable) {
+      const li = document.createElement("li"), b = document.createElement("button");
+      b.type = "button";
+      b.innerHTML = `<span class="to"></span><span class="from"></span><span class="id"></span>`;
+      b.querySelector(".to").textContent = z.title;
+      b.querySelector(".from").textContent = "from the box " + z.label;
+      b.querySelector(".id").textContent = "⊕";
+      b.onclick = () => {
+        const g = [...stage.querySelectorAll("g.node.zoomable")].find((n) => nodeId(n) === z.box);
+        g ? zoomInto(g, z.slug) : go(z.slug, { from: "in" });
+      };
+      li.append(b); ul.append(li);
+    }
+  }
+
+  function renderMap() {
+    const build = (sl) => {
+      const li = document.createElement("li");
+      li.append(button(bySlug.get(sl).title, () => go(sl, {}), current && current.slug === sl));
+      const kids = sections.filter((s) => parent.get(s.slug) === sl);
+      if (kids.length) { const ul = document.createElement("ul"); kids.forEach((k) => ul.append(build(k.slug))); li.append(ul); }
+      return li;
+    };
+    $("map").replaceChildren(build(sections[0].slug));
+  }
+
+  addEventListener("keydown", (e) => {
+    const t = e.target instanceof Element ? e.target : document.body;
+    if (t.closest("input, textarea")) return;
+    if (e.key === "Escape" || (e.key === "Backspace" && !t.closest("button"))) { goUp(); }
+    else if (e.key === "+" || e.key === "=") $("zoom-in").click();
+    else if (e.key === "-") $("zoom-out").click();
+    else if (e.key === "0") $("zoom-fit").click();
+  });
+  addEventListener("resize", () => { fitView(); apply(); });
+
+  // Re-draw in the other theme's colours when the viewer switches.
+  const rethemed = () => { if (!sections.length) return; setupMermaid(); render(current ? current.slug : sections[0].slug); };
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rethemed);
+  new MutationObserver(rethemed).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  // ---- Start. -------------------------------------------------------------------------------------------------
+  function start(md) {
+    sections = parse(md);
+    if (!sections.length) throw new Error("no sections in DIAGRAMS.md");
+    index(); setupMermaid();
+    render(location.hash.slice(1) || sections[0].slug);
+  }
+
+  // Opened as a file, or the libraries didn't load: say how to open it, and offer to read DIAGRAMS.md directly.
+  function fallback(reason) {
+    $("heading").textContent = "The diagrams couldn't be loaded";
+    $("hint").hidden = true;
+    $("prose").innerHTML = `
+      <div class="fallback" style="padding:0">
+        <p>This page reads <code>DIAGRAMS.md</code> from its own folder, which browsers only allow through a web
+        server. From the repository root, run <code>python -m http.server -d docs 8000</code> and open
+        <code>http://localhost:8000/diagrams.html</code>.</p>
+        <p><label for="pick">Or choose <code>docs/DIAGRAMS.md</code>:</label><br>
+        <input type="file" id="pick" accept=".md,text/markdown,text/plain"></p>
+        <p style="color:var(--muted)">Reason: ${String(reason).replace(/</g, "&lt;")}</p>
+      </div>`;
+    $("pick").addEventListener("change", async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try { start(await f.text()); $("hint").hidden = false; } catch (err) { fallback(err.message || err); }
+    });
+  }
+
+  if (typeof mermaid === "undefined" || typeof marked === "undefined") { fallback("a library didn't load"); return; }
+  fetch("DIAGRAMS.md").then((r) => { if (!r.ok) throw new Error(`DIAGRAMS.md: HTTP ${r.status}`); return r.text(); })
+    .then(start).catch(fallback);
+})();
+</script>
