@@ -5,6 +5,15 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.2.0 - 2026-11-01
+Second release. Everything in v0.1.0 plus:
+- Waves: tap the main screen to send a bicolour wave to every board nearby (centre = rings growing outward;
+  left, right, top or bottom = bands moving in from that side); colour B is the opposite of your colour; waves
+  from several boards merge, and a held colour adds to them.
+- A board with a saved colour starts on the main screen; the colour ring is one swipe to the right.
+- Swipes start after 28 px of finger travel, so taps and holds with a slight move stay what they are.
+- The installer page explains the gestures and lets you configure a board over USB.
+
 ## v0.2.0-rc.2 - 2026-11-01
 - Swipes are less touchy: a finger must move 28 px (was 10) before a swipe starts, so taps and holds with a
   slight move stay taps and holds.
