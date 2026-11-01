@@ -9,6 +9,7 @@
 #include "check.h"
 #include "mesh_proto.h"
 #include "wave.h"
+#include "layer.h"
 
 #define PI 3.14159265358979323846
 #define W WAVE_W
@@ -457,6 +458,34 @@ static void test_timing(void)
     printf("  centre + left + top          %.2f ms (3 groups: normalised per pixel)\n", frame_ms(cxy, 3, &NOHOLD, frames));
 }
 
+// layer_over: a page's ARGB8888 pixels over a byte-swapped RGB565 band: transparent keeps the band, opaque replaces
+// it, half blends, and the swap is undone and redone (a red band stays red under a transparent pixel)
+static uint16_t swapped(uint8_t r, uint8_t g, uint8_t b)
+{
+    uint16_t px = (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | b >> 3);
+    return (uint16_t)(px << 8 | px >> 8);
+}
+
+static void test_layer(void)
+{
+    uint16_t band[4] = { swapped(255, 0, 0), swapped(255, 0, 0), swapped(0, 0, 0), swapped(0, 0, 255) };
+    const uint8_t page[16] = {
+        0, 0, 0, 0,                                  // transparent: the red band stays
+        255, 255, 255, 255,                          // opaque white
+        0, 255, 0, 128,                              // half green over black
+        0, 0, 0, 255,                                // opaque black over blue (the text on a bright wave)
+    };
+    layer_over(band, page, 4);
+    CHECK(band[0] == swapped(255, 0, 0), "transparent keeps the background");
+    CHECK(band[1] == swapped(255, 255, 255), "opaque replaces it");
+    CHECK(band[2] == swapped(0, 128, 0), "half green over black: %04x", band[2]);
+    CHECK(band[3] == swapped(0, 0, 0), "opaque black hides the blue");
+    uint16_t one = swapped(0, 0, 248);
+    const uint8_t quarter[4] = { 0, 0, 255, 64 };    // a quarter red over blue
+    layer_over(&one, quarter, 1);
+    CHECK(one == swapped(64, 0, 185), "a quarter red over blue: %04x", one);
+}
+
 int main(void)
 {
     test_uninitialised();
@@ -481,5 +510,6 @@ int main(void)
     test_bands();
     test_timing();
     free(mem);
+    test_layer();
     return check_done("wave");
 }

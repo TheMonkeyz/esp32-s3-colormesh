@@ -149,7 +149,7 @@ class Baseline(unittest.TestCase):
 
     def test_app_metrics_have_their_suite(self):
         # what app_suites measures: perf's swipe_* and drag_first_frame_ms; snapshots are the core screens suite's
-        self.assertEqual(suite_of('swipe_fps.main_to_system'), 'perf')
+        self.assertEqual(suite_of('swipe_fps.main_to_voice'), 'perf')
         self.assertEqual(suite_of('drag_first_frame_ms'), 'perf')
         self.assertEqual(suite_of('snapshot_ms.pick'), 'screens')
         for s in app_suites.APP_ORDER:
@@ -452,7 +452,7 @@ class FakePager:
     """The pager as the console drives it: `screen NAME` jumps to a page, `swipe left|right` moves one page (the ends
     bounce), `cfg` gives the colour. wait_screen is immediate (the swipe already settled)."""
 
-    def __init__(self, pages=('pick', 'main', 'system'), save_on_return=False):
+    def __init__(self, pages=('pick', 'main', 'voice', 'game', 'system'), save_on_return=False):
         self.pages, self.at, self.color, self.save_on_return = list(pages), 0, '#00ff00', save_on_return
         self.log, self.sent, self.seen = FakeLog(), [], []
 
@@ -613,13 +613,13 @@ class AppSuites(unittest.TestCase):
         self.assertEqual(set_to, ['ff8000'])
 
     def test_pager_pages(self):
-        # one pager, left to right: the colour ring, main (home), system; forge.json names them all
-        self.assertEqual(app_suites.PAGES, ['pick', 'main', 'system'])
-        self.assertEqual((app_suites.PREV, app_suites.HOME, app_suites.NEXT), ('pick', 'main', 'system'))
+        # one pager, left to right: the colour ring, main (home), voice, game, system; forge.json names them all
+        self.assertEqual(app_suites.PAGES, ['pick', 'main', 'voice', 'game', 'system'])
+        self.assertEqual((app_suites.PREV, app_suites.HOME, app_suites.NEXT), ('pick', 'main', 'voice'))
         for name in app_suites.PAGES:
             self.assertIn(name, CFG['screens'])
         self.assertEqual([f.__name__ for f in SUITES['navigation']],
-                         ['pick_then_main', 'pick_long_press', 'swipe_to_system', 'swipe_to_ring'])
+                         ['pick_then_main', 'pick_long_press', 'swipe_to_voice', 'swipe_to_ring'])
         self.assertIn('color2', [f.__name__ for f in SUITES['mesh']])
 
     def run_nav(self, fn, brd):
@@ -634,10 +634,10 @@ class AppSuites(unittest.TestCase):
 
     def test_swipes_walk_the_pager(self):
         b = FakePager()
-        self.run_nav(app_suites.swipe_to_system, b)
+        self.run_nav(app_suites.swipe_to_voice, b)
         ctx = self.run_nav(app_suites.swipe_to_ring, b)
         self.assertEqual(b.sent, ['screen main', 'swipe left', 'swipe right', 'screen main', 'swipe right', 'swipe left'])
-        self.assertEqual(b.seen, ['main', 'system', 'main', 'main', 'pick', 'main'])
+        self.assertEqual(b.seen, ['main', 'voice', 'main', 'main', 'pick', 'main'])
         self.assertTrue(any('#00ff00 kept' in n for n in ctx.notes))
 
     def test_swipe_to_ring_fails_when_the_swipes_save_a_colour(self):
@@ -703,12 +703,12 @@ class AppSuites(unittest.TestCase):
     def test_swipe_no_hold_passes_with_the_drag_hook(self):
         b, ctx = self.run_swipes(old=False)
         self.assertEqual(b.sent, ['screen main', 'swipe left', 'screen main', 'swipe right', 'screen main'])
-        self.assertEqual(ctx.notes, ['swipe left -> system: held 21 ms; swipe right -> pick: held 21 ms'])
+        self.assertEqual(ctx.notes, ['swipe left -> voice: held 21 ms; swipe right -> pick: held 21 ms'])
 
     def test_swipe_no_hold_fails_on_the_old_firmware(self):
         with self.assertRaises(Fail) as e:
             self.run_swipes(old=True)
-        self.assertIn('only after "ui: page system"', str(e.exception))
+        self.assertIn('only after "ui: page voice"', str(e.exception))
 
 
 class FakeColor2(FakePager):

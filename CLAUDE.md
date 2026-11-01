@@ -117,6 +117,9 @@ Add each preference the user states (gestures, wording, timing, look) with the d
 - 2026-11-01, calls: the ringing board says "Toucher l'écran pour répondre" (not "pour arrêter"); the caller must
   see when a callee answers, with a sound: the user picked **#6 of ten, a rising doo-di-dit (A5 C#6 E6)** in the
   ring's buzzer sound. The caller must see **everyone** who answered (a dot each), not only the first.
+- 2026-11-01, pages: left to right **colour choice, mesh, calling, rock paper scissors, system**; every page but
+  system shows the mesh's colours and waves behind it **at full strength** (choice A of three mockups: full / dimmed
+  35 % / edge only).
 - 2026-11-01: fingers land low on the voice page's Call button (rc.6 missed a press 21 px under it): keep its touch
   margin large and never start a recording near it.
 

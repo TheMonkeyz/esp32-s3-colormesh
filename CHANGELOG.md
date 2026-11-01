@@ -5,6 +5,11 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.10 - 2026-11-01
+- New page order, left to right: colour choice, the mesh, voice and calls, rock paper scissors, system.
+- The colour choice, voice and game pages show the mesh behind them: the mixed colour while someone holds, and the
+  waves.
+
 ## v0.6.0-rc.8 - 2026-11-01
 - The first tagged build of the voice release: the same code as rc.7 (rc.1-rc.7 were test labels).
 - Voice clips: swipe to the last page ("Voice"), hold the screen and talk (up to 5 s), let go: every board in range
