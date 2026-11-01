@@ -448,6 +448,40 @@ class FakeCtx:
         self.notes.append(text)
 
 
+class FakePager:
+    """The pager as the console drives it: `screen NAME` jumps to a page, `swipe left|right` moves one page (the ends
+    bounce), `cfg` gives the colour. wait_screen is immediate (the swipe already settled)."""
+
+    def __init__(self, pages=('pick', 'main', 'system'), save_on_return=False):
+        self.pages, self.at, self.color, self.save_on_return = list(pages), 0, '#00ff00', save_on_return
+        self.log, self.sent, self.seen = FakeLog(), [], []
+
+    def cmd(self, line, expect=None, **kw):
+        self.sent.append(line)
+        if line.startswith('screen '):
+            self.at = self.pages.index(line.split()[1])
+        elif line in ('swipe left', 'swipe right'):
+            self.at = max(0, min(len(self.pages) - 1, self.at + (1 if line == 'swipe left' else -1)))
+            if self.save_on_return and self.pages[self.at] == 'main':
+                self.color = '#ff0000'
+                self.log.data.append('I (100) cfg: color #ff0000')
+        return re.search(r'.*', 'test: ok')
+
+    def show(self, name):
+        self.cmd(f'screen {name}')
+
+    def screen(self):
+        return self.pages[self.at]
+
+    def wait_screen(self, name, timeout, step=1.0):
+        self.seen.append(self.screen())
+        if self.screen() != name:
+            raise Fail(f'screen is "{self.screen()}", expected "{name}" within {timeout} s')
+
+    def cfg(self):
+        return {'color': self.color}
+
+
 class FakeBoard:
     """Answers console commands from a table: cmd(line, expect) -> the match of `expect` on the reply."""
 
@@ -577,6 +611,44 @@ class AppSuites(unittest.TestCase):
         app_suites.put_back_color(b, None)
         app_suites.put_back_color(b, 'garbage')
         self.assertEqual(set_to, ['ff8000'])
+
+    def test_pager_pages(self):
+        # one pager, left to right: the colour ring, main (home), system; forge.json names them all
+        self.assertEqual(app_suites.PAGES, ['pick', 'main', 'system'])
+        self.assertEqual((app_suites.PREV, app_suites.HOME, app_suites.NEXT), ('pick', 'main', 'system'))
+        for name in app_suites.PAGES:
+            self.assertIn(name, CFG['screens'])
+        self.assertEqual([f.__name__ for f in SUITES['navigation']], ['pick_then_main', 'swipe_to_system', 'swipe_to_ring'])
+
+    def run_nav(self, fn, brd):
+        ctx = FakeCtx(brd, brd.log, tempfile.gettempdir())
+        real = app_suites.time.sleep
+        app_suites.time.sleep = lambda s: None
+        try:
+            fn(ctx)
+        finally:
+            app_suites.time.sleep = real
+        return ctx
+
+    def test_swipes_walk_the_pager(self):
+        b = FakePager()
+        self.run_nav(app_suites.swipe_to_system, b)
+        ctx = self.run_nav(app_suites.swipe_to_ring, b)
+        self.assertEqual(b.sent, ['screen main', 'swipe left', 'swipe right', 'screen main', 'swipe right', 'swipe left'])
+        self.assertEqual(b.seen, ['main', 'system', 'main', 'main', 'pick', 'main'])
+        self.assertTrue(any('#00ff00 kept' in n for n in ctx.notes))
+
+    def test_swipe_to_ring_fails_when_the_swipes_save_a_colour(self):
+        b = FakePager(save_on_return=True)                 # the old swatch handler: the press of the swipe picked
+        with self.assertRaises(Fail) as e:
+            self.run_nav(app_suites.swipe_to_ring, b)
+        self.assertIn('saved a colour', str(e.exception))
+
+    def test_swipe_to_ring_fails_on_the_old_two_page_pager(self):
+        b = FakePager(pages=['main', 'system'])            # before the ring was a page: a swipe right on main bounces
+        with self.assertRaises(Fail) as e:
+            self.run_nav(app_suites.swipe_to_ring, b)
+        self.assertIn('expected "pick"', str(e.exception))
 
     def test_watch_lines(self):
         hits = lambda line: [what for rx, what in app_suites.APP_WATCH if re.search(rx, line)]

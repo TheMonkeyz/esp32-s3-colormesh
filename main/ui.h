@@ -1,11 +1,12 @@
 #pragma once
 #include <stdint.h>
 
-// The app's screens: "pick" (a ring of colours at boot), "main" (own colour, the mix, the peers), "system"
+// The app's screens: "pick" (a ring of colours: shown at boot), "main" (own colour, the mix, the peers), "system"
 // (version, address, memory, peers) and "message". Any task may call these: they take the display lock.
-// "main" and "system" are the two pages of one pager (swipe left / right). The screens poll config_get(),
-// mesh_get_mix(), mesh_peers() and mesh_fw_progress() every 50 ms (an LVGL timer), so a setting changed from the
-// console shows within 50 ms without a call here.
+// "pick" | "main" | "system" are the three pages of one pager: a swipe right on main opens the ring, a tap on a
+// colour there saves it and slides back to main, a swipe left goes back without a change. The screens poll
+// config_get(), mesh_get_mix(), mesh_peers() and mesh_fw_progress() every 50 ms (an LVGL timer), so a setting changed
+// from the console shows within 50 ms without a call here.
 void ui_init(void);
 void ui_show_pick(void);
 void ui_show_main(void);

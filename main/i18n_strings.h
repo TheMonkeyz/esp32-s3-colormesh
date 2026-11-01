@@ -8,9 +8,10 @@
 // Start-up (main.c)
 X(T_STARTING,       "Starting...",                 "Démarrage...")
 
-// Pick screen
+// Pick screen (the pager's first page, left of main)
 X(T_PICK_COLOUR,    "Pick your colour",            "Choisissez votre couleur")
 X(T_TAP_ONE,        "Tap one",                     "Touchez une pastille")
+X(T_SWIPE_BACK,     "Swipe left to go back",       "Glissez vers la gauche\npour revenir")
 
 // Main screen (the version string already starts with "v")
 X(T_HOLD_HINT,      "Touch the screen to send your colour", "Toucher l'écran pour envoyer votre couleur")

@@ -1,5 +1,6 @@
-// The app's screens (see ui.h): "pick" (12 colours on a ring), "main" | "system" (two pages of a pager, swiped like
-// the espforge starter's hello | system), "message". Everything here runs in the LVGL task or under display_lock.
+// The app's screens (see ui.h): "pick" | "main" | "system", the three pages of one pager (swiped like the espforge
+// starter's hello | system: the ring of 12 colours on the left, main in the middle), and "message". Everything here
+// runs in the LVGL task or under display_lock.
 #include "ui.h"
 #include <math.h>
 #include <stdio.h>
@@ -46,8 +47,11 @@ extern const uint8_t ttf_start[] asm("_binary_montserrat_ttf_start");
 extern const uint8_t ttf_end[]   asm("_binary_montserrat_ttf_end");
 
 static lv_font_t *f_mid, *f_small, *f_tiny;
-static lv_obj_t *scr_pick, *scr_main, *pager, *pg_main, *pg_sys, *scr_msg;
-static lv_obj_t *p_title, *p_sub, *p_sw[SW_N];
+enum { PG_PICK, PG_MAIN, PG_SYS, PG_N };       // the pager's pages, left to right
+static const char *const page_name[PG_N] = { "pick", "main", "system" };
+
+static lv_obj_t *scr_pager, *pager, *pg_pick, *pg_main, *pg_sys, *scr_msg;
+static lv_obj_t *p_title, *p_sub, *p_back, *p_sw[SW_N];
 static lv_obj_t *mn_ring, *mn_disc, *mn_arc, *mn_hint, *mn_near, *mn_dev, *mn_dot[MAX_DOTS];
 static lv_obj_t *s_title, *s_lines, *s_peers, *s_row[SYS_ROWS], *s_sw[SYS_ROWS];
 static lv_obj_t *m_title, *m_body;
@@ -142,29 +146,38 @@ static void pick_refresh(void)
 {
     set_text(p_title, tr(T_PICK_COLOUR));
     set_text(p_sub, tr(T_TAP_ONE));
+    set_text(p_back, tr(T_SWIPE_BACK));
     pick_update();
 }
 
-static void show_main_locked(void);
+static void main_update(bool texts);
+
+static void to_main(void *unused)            // slide_change's change: the pager on main (on_settle: "page main")
+{
+    main_update(true);
+    pager_switch(pager, PG_MAIN);
+}
 
 static void swatch_tapped(lv_event_t *e)
 {
+    // A tap during a move or right after one is the next quick swipe's press, not a pick (slide.h); a tap while the
+    // ring is not the page shown can't happen, but would pick blind
+    if (!slide_tap_ok() || lv_screen_active() != scr_pager || pager_current(pager) != PG_PICK) return;
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     uint8_t r = sw_rgb[i] >> 16, g = sw_rgb[i] >> 8 & 0xFF, b = sw_rgb[i] & 0xFF;
     ESP_LOGI(TAG, "picked #%06lx", (unsigned long)sw_rgb[i]);
     config_set_color(r, g, b);
     mesh_set_color(r, g, b);
     pick_update();
-    show_main_locked();
+    slide_change(1, false, to_main, NULL);   // the ring slides out to the left, main comes in from the right
 }
 
-static void pick_create(void)
+static void pick_create_page(lv_obj_t *pg)
 {
-    scr_pick = base_screen();
     for (int i = 0; i < SW_N; i++) {
         float a = i * 30.0f * (float)M_PI / 180.0f;
         int x = CX + (int)lroundf(SW_RING * sinf(a)), y = CY - (int)lroundf(SW_RING * cosf(a));
-        lv_obj_t *s = p_sw[i] = lv_obj_create(scr_pick);
+        lv_obj_t *s = p_sw[i] = lv_obj_create(pg);
         lv_obj_remove_style_all(s);
         lv_obj_set_size(s, 2 * SW_R, 2 * SW_R);
         lv_obj_set_pos(s, x - SW_R, y - SW_R);
@@ -179,7 +192,7 @@ static void pick_create(void)
         lv_obj_set_ext_click_area(s, 8);              // 22 px is small for a finger; neighbours are 94 px apart
         lv_obj_add_event_cb(s, swatch_tapped, LV_EVENT_SHORT_CLICKED, (void *)(intptr_t)i);
     }
-    lv_obj_t *box = lv_obj_create(scr_pick);          // the two lines, centred together whatever wraps
+    lv_obj_t *box = lv_obj_create(pg);                // the three lines, centred together whatever wraps
     lv_obj_remove_style_all(box);
     lv_obj_set_size(box, 280, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
@@ -189,6 +202,7 @@ static void pick_create(void)
     lv_obj_center(box);
     p_title = label(box, f_mid, C_TEXT, 0, 270);
     p_sub = label(box, f_small, C_DIM, 0, 260);
+    p_back = label(box, f_tiny, C_HINT, 0, 220);
     pick_refresh();
 }
 
@@ -406,38 +420,45 @@ static void system_create_page(lv_obj_t *pg)
 
 /* ---------- timers ---------- */
 
-// Every 50 ms: the main page's values (only what changed is touched), the pick outline, the hold safety net
+// Every 50 ms: the main page's values (only what changed is touched), the pick outline, the hold safety net. A hold
+// is only ever on main: a swipe that starts there (its press already sent "hold on") ends it once it lands on the
+// ring or on system; a press on the ring or on system starts none (only pg_main has the press handlers).
 static void fast_tick(lv_timer_t *t)
 {
-    lv_obj_t *act = lv_screen_active();
-    if (ui_hold && (touch_idle_ms() > HOLD_IDLE_MS || act != scr_main || pager_current(pager) != 0)) {
+    bool on_pager = lv_screen_active() == scr_pager;
+    if (ui_hold && (touch_idle_ms() > HOLD_IDLE_MS || !on_pager || pager_current(pager) != PG_MAIN)) {
         ESP_LOGI(TAG, "hold released (no finger for %lu ms, or the page changed)", (unsigned long)touch_idle_ms());
         hold_set(false);
     }
-    if (act == scr_main) main_update(false);
-    else if (act == scr_pick) pick_update();
+    if (on_pager) {                           // every page: a swipe shows a picture of the neighbours
+        main_update(false);
+        pick_update();
+    }
 }
 
 // Every second while the pager is shown: the system page (shown, or the neighbour a swipe will show a picture of)
 static void slow_tick(lv_timer_t *t)
 {
-    if (lv_screen_active() == scr_main) system_refresh();
+    if (lv_screen_active() == scr_pager) system_refresh();
 }
 
 static void page_settled(int page, void *user)
 {
-    ESP_LOGI(TAG, "page %s", page ? "system" : "main");
-    if (page == 1) system_refresh();
-    else main_update(false);
+    ESP_LOGI(TAG, "page %s", page >= 0 && page < PG_N ? page_name[page] : "?");
+    if (page == PG_SYS) system_refresh();
+    else if (page == PG_MAIN) main_update(false);
+    else pick_refresh();
 }
 
 static void pager_create_screen(void)
 {
-    scr_main = base_screen();
-    pager = pager_create(scr_main, false, 2, NULL, page_settled, NULL);
+    scr_pager = base_screen();
+    pager = pager_create(scr_pager, false, PG_N, NULL, page_settled, NULL);
     slide_pager(pager);                       // drags drawn as pictures (~60 fps), not LVGL scrolling
-    pg_main = pager_page(pager, 0);
-    pg_sys = pager_page(pager, 1);
+    pg_pick = pager_page(pager, PG_PICK);
+    pg_main = pager_page(pager, PG_MAIN);
+    pg_sys = pager_page(pager, PG_SYS);
+    pick_create_page(pg_pick);
     main_create_page(pg_main);
     system_create_page(pg_sys);
 }
@@ -453,35 +474,41 @@ static void msg_create(void)
 
 /* ---------- showing, screen registry ---------- */
 
+static void show_page_locked(int page)       // at once, no slide (the console's "screen", start-up)
+{
+    pager_go(pager, page, false);
+    if (lv_screen_active() != scr_pager) lv_screen_load(scr_pager);
+}
+
 static void show_pick_locked(void)
 {
     pick_refresh();
-    if (lv_screen_active() != scr_pick) lv_screen_load(scr_pick);
+    show_page_locked(PG_PICK);
 }
 
 static void show_main_locked(void)
 {
     main_update(true);
-    pager_go(pager, 0, false);
-    if (lv_screen_active() != scr_main) lv_screen_load(scr_main);
+    show_page_locked(PG_MAIN);
 }
 
 static void show_system_locked(void)
 {
     system_refresh();
-    pager_go(pager, 1, false);
-    if (lv_screen_active() != scr_main) lv_screen_load(scr_main);
+    show_page_locked(PG_SYS);
 }
 
 static void show_msg_locked(void) { if (lv_screen_active() != scr_msg) lv_screen_load(scr_msg); }
 
-static lv_obj_t *get_pick(void) { return scr_pick; }
+static bool page_shown(int page) { return lv_screen_active() == scr_pager && pager_current(pager) == page; }
+
+static lv_obj_t *get_pick(void) { return pg_pick; }
 static lv_obj_t *get_main(void) { return pg_main; }
 static lv_obj_t *get_sys(void) { return pg_sys; }
 static lv_obj_t *get_msg(void) { return scr_msg; }
-static bool shown_pick(void) { return lv_screen_active() == scr_pick; }
-static bool shown_main(void) { return lv_screen_active() == scr_main && pager_current(pager) == 0; }
-static bool shown_sys(void) { return lv_screen_active() == scr_main && pager_current(pager) == 1; }
+static bool shown_pick(void) { return page_shown(PG_PICK); }
+static bool shown_main(void) { return page_shown(PG_MAIN); }
+static bool shown_sys(void) { return page_shown(PG_SYS); }
 static bool shown_msg(void) { return lv_screen_active() == scr_msg; }
 
 static const screen_def_t screens[] = {
@@ -497,7 +524,6 @@ void ui_init(void)
     f_mid = mkfont(30);
     f_small = mkfont(20);
     f_tiny = mkfont(14);
-    pick_create();
     pager_create_screen();
     msg_create();
     screens_register(screens, sizeof(screens) / sizeof(screens[0]));

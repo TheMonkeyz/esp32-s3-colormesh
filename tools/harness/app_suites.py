@@ -1,4 +1,4 @@
-"""ColorMesh's own tests (main/: the pick ring, the main and system pages, the Bluetooth mesh through the console).
+"""ColorMesh's own tests (main/: the pager's pick ring | main | system pages, the Bluetooth mesh through the console).
 Same registry (@test from board.py), same ctx as core_suites.py. The board has no network: every test goes through
 the USB console and the serial log (docs/PROTOCOL.md; the commands: color, devmode, name, bright, peers, cfg, hold,
 shot, plus forge_lvgl's screen / tap / press / swipe / drag and the board's fps).
@@ -26,8 +26,9 @@ APP_WATCH = [
 ]
 METRIC_SUITES = [('drag_first_frame_ms', 'perf'), ('swipe_', 'perf')]
 
-HOME, NEXT = 'main', 'system'                          # the pager's two pages, side by side: main | system
-RING_R = 180                                           # the pick screen: 12 swatches on a ring around the centre,
+PAGES = ['pick', 'main', 'system']                     # the pager's pages, left to right: ring | main | system
+PREV, HOME, NEXT = PAGES                               # a swipe right on main opens the ring, a swipe left system
+RING_R = 180                                           # the pick page: 12 swatches on a ring around the centre,
 RED_SWATCH = (SCREEN_C[0], SCREEN_C[1] - RING_R)       # hue 0 = red at the top, clockwise every 30 degrees
 RED = '#ff0000'
 
@@ -85,6 +86,27 @@ def swipe_to_system(ctx):
     time.sleep(0.8)
     b.wait_screen(HOME, 6)
     ctx.note(f'{HOME} <-> {NEXT} by swipes')
+
+
+@test('navigation')
+def swipe_to_ring(ctx):
+    """A swipe right from main opens the colour ring (`pick`); a swipe left goes back to main without changing the
+    colour (only a tap on a swatch saves one: no `cfg: color` line, `cfg` agrees)."""
+    b = ctx.board
+    before = b.cfg().get('color')
+    go_home(ctx)
+    at = len(ctx.log.lines())
+    b.cmd('swipe right')
+    time.sleep(0.8)
+    b.wait_screen(PREV, 6)
+    b.cmd('swipe left')
+    time.sleep(0.8)
+    b.wait_screen(HOME, 6)
+    saved = [l for l in ctx.log.lines()[at:] if re.search(r'cfg: color ', l)]
+    check(not saved, f'the swipes {HOME} -> {PREV} -> {HOME} saved a colour: {saved[0] if saved else ""}')
+    after = b.cfg().get('color')
+    check(after == before, f'the swipes {HOME} -> {PREV} -> {HOME} changed the colour: {before} -> {after}')
+    ctx.note(f'{HOME} -> {PREV} -> {HOME} by swipes, the colour {before} kept')
 
 
 # ---------------------------------------------------------------- mesh (Bluetooth, through the console)
