@@ -201,3 +201,15 @@ Estimates from the research (to replace with `idf.py size` and the `heap` comman
 - forge_net is linked but never started (v0.1.0-rc.1): forge_lvgl's `screens.h` includes `web.h`; espforge backlog.
 - The advertising interval is fixed at 20 ms (v0.1.0-rc.1); the burst-then-100 ms scheme for six boards and more is
   not built.
+
+### Display: tear-free frames (components/board, 2026-10-31)
+
+The board driver is a local copy of espforge's with: the panel's TE line read on GPIO13 (59 Hz, high 0.63 ms during
+the vertical blank), LVGL rendering in DIRECT mode into one 434 KB PSRAM frame, dirty rows pushed as whole 32-row
+bands through the two internal DMA buffers right after the TE edge (raw frames for swipes) or, for LVGL frames, as soon
+as the scan is too far down to be caught (max wait ~6 ms). Measured: full redraw 31-36 ms render + 15 ms push, every
+push ends before the scan (15.9 vs 16.2 ms), 0 TE timeouts, swipes at 54-57 fps. Console `te [lvgl|raw|chase on|off]
+[log N]`; `fps` has push and TE fields. Internal RAM unchanged (134 KB free), PSRAM -430 KB. Known risk: an edge
+start leads the scan by ~0.6 ms at the top; a long stall of the LVGL task there (NVS write) can still tear one
+refresh. To port to espforge's board (backlog).
+

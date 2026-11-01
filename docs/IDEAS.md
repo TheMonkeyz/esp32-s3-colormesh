@@ -26,5 +26,8 @@ board renders the same phase (the ESP-NOW badge swarm pattern: adopt the highest
 wave as a stateless function of (now - start) through the tear-free raw-frame path (bands filled from a row/column
 distance table, two colours blended in linear light), so a 30 fps full-screen wave costs no radio bandwidth. The
 hold gesture could pick the wave while a second gesture (swipe up/down on the ring page?) picks the effect. Mixing
-rule with several senders: the newest effect wins (last-writer-wins by seq), colours still mix.
+rule with several senders (the user, 2026-10-31): the waves **merge like the colours do**: every board renders each
+sender's wave (its own included while it holds) and sums them per pixel in linear light, normalised so the largest
+channel is full, the same `mp_mix` rule applied per pixel. A 466x466 frame with up to 3 senders is 3 wave
+evaluations per pixel: use row/column distance tables and 16-bit fixed point, measure the frame time first.
 
