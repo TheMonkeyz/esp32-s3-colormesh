@@ -5,6 +5,13 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.6.0-rc.8 - 2026-11-01
+- The first tagged build of the voice release: the same code as rc.7 (rc.1-rc.7 were test labels).
+- Voice clips: swipe to the last page ("Voice"), hold the screen and talk (up to 5 s), let go: every board in range
+  plays it at once.
+- Calls: the Call button rings every other board with the classic phone tune; a touch answers, and the caller sees
+  everyone who answered.
+
 ## v0.6.0-rc.7 - 2026-11-01
 - Calls: the caller sees everyone who answers, one dot per board in its colour, with the doo-di-dit for each; an
   answer that comes after "Answered" closed opens it again, as long as the others can still ring.
