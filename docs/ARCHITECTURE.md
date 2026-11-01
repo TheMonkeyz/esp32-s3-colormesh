@@ -223,7 +223,9 @@ refresh. To port to espforge's board (backlog).
 
 A tap on the main screen (centre within 100 px, else the quadrant) calls `mesh_start_wave(kind)`: the own wave starts
 at once; the advert carries `effect` (1-5) and `effect_seq` at payload bytes 17-18 for 1 s. A peer whose
-(effect, effect_seq) is new starts that wave at receiver time in the peer's colour (`mesh_waves()`). While a wave
+(effect, effect_seq) is new starts that wave at receiver time in the peer's colour (`mesh_waves()`). Bytes 19-21
+carry the sender's chosen colour B (0,0,0 = automatic, the opposite hue; v0.3.0): a long press on a ring swatch sets
+it (NVS `rgb2`), console `color2`, the USB card's "Wave colour" row. While a wave
 is active and the main page is shown, an LVGL timer (33 ms) paints the screen with `display_raw_frame` and
 `wave_fill()` (pure C: colour A = the sender's colour, B = `wave_opposite`, pitch 64 px, 160 px/s, 4 s with a
 500 ms fade; waves summed per pixel in linear light and normalised, holders' solid colours added; the edge ring
