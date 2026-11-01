@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Français (Québec), écrit standard, forme « vous » à l'infinitif comme sur les cartes (main/i18n_strings.h). -->
+<resources>
+    <string name="app_name">ColorMesh</string>
+    <string name="hold_hint">Toucher le cercle pour envoyer votre couleur</string>
+    <plurals name="near">
+        <item quantity="one">%d à portée</item>
+        <item quantity="other">%d à portée</item>
+    </plurals>
+    <string name="call">Appeler</string>
+    <string name="call_in">Appel entrant</string>
+    <string name="call_answer">Toucher le cercle pour répondre</string>
+    <string name="call_out">Appel en cours…</string>
+    <string name="call_answered">Appel répondu</string>
+    <string name="call_close">Toucher le cercle pour fermer</string>
+    <string name="need_permission">ColorMesh a besoin de l\'autorisation Bluetooth pour entendre et joindre les cartes.</string>
+    <string name="bt_off">Activer le Bluetooth pour rejoindre les cartes.</string>
+    <string name="radio_error">Erreur Bluetooth (%s)</string>
+</resources>

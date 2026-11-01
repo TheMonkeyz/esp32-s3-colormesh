@@ -1,5 +1,6 @@
 // mesh_proto.c: the advertisement payload, the version byte, the peer table (seq, expiry, replacement), the
 // additive mix in linear light and the advertising cadence.
+#include <stdio.h>
 #include <string.h>
 #include "check.h"
 #include "mesh_proto.h"
@@ -28,22 +29,20 @@ static bool same(const mp_state_t *a, const mp_state_t *b)
            a->effect == b->effect && a->effect_seq == b->effect_seq && a->b2r == b->b2r && a->b2g == b->b2g &&
            a->b2b == b->b2b && a->game_seq == b->game_seq && a->game_starter == b->game_starter &&
            a->game_left == b->game_left && a->game_pick == b->game_pick && a->clip_id == b->clip_id &&
-           a->clip_ds == b->clip_ds && a->answer_to == b->answer_to;
+           a->clip_ds == b->clip_ds && a->answer_to == b->answer_to && a->adv_ds == b->adv_ds;
 }
 
 static void test_payload(void)
 {
     mp_state_t s = { 0xA7, 0xFE, 3, MP_F_HOLDING | MP_F_DEV | MP_F_SERVABLE | MP_F_PENDING, 0x12, 0x34, 0x56,
-                     { 1, 2, 3, 104 }, 0x42, MP_EFFECT_WAVE_BOTTOM, 0x9C, 0x00, 0xC8, 0x3B, 0x07, 0x76, 30, 2, 0xD3, 50, 0x9A };
+                     { 1, 2, 3, 104 }, 0x42, MP_EFFECT_WAVE_BOTTOM, 0x9C, 0x00, 0xC8, 0x3B, 0x07, 0x76, 30, 2, 0xD3, 50, 0x9A, 0 };
     uint8_t buf[31];
     memset(buf, 0xEE, sizeof(buf));
     CHECK(mp_encode(&s, buf, sizeof(buf)) == 30, "encode length");
     static const uint8_t want[29] = { 29, 0xFF, 0xFF, 0xFF, 0x43, 0xA7, 0xFE, 3, 0x0F, 0x12, 0x34, 0x56,
                                       1, 2, 3, 104, 0x42, 5, 0x9C, 0x00, 0xC8, 0x3B, 0x07, 0x76, 30, 2, 0xD3, 50, 0x9A };
     CHECK(!memcmp(buf, want, sizeof(want)), "byte map");
-    bool zero = true;
-    for (int i = 29; i < 30; i++) zero = zero && buf[i] == 0;
-    CHECK(zero, "reserved byte 29 is zero");
+    CHECK(buf[29] == 0, "byte 29 (advertising interval) is zero when not set");
     CHECK(buf[30] == 0xEE, "nothing written past 30 bytes");
     CHECK(mp_encode(&s, buf, 29) == -1, "a 29-byte buffer is too small");
     CHECK(mp_encode(&s, buf, 30) == 30, "a 30-byte buffer is enough");
@@ -54,14 +53,14 @@ static void test_payload(void)
     memset(&d, 0, sizeof(d));
     CHECK(mp_decode_ad(buf, 30, &d) && same(&d, &s), "round trip through the whole AD structure");
     // every field on its own, so a swapped pair would show
-    for (int f = 0; f < 24; f++) {         // origin seq ttl flags r g b ver[0..3] target effect effect_seq b2r b2g b2b game_* clip_*
+    for (int f = 0; f < 25; f++) {         // origin seq ttl flags r g b ver[0..3] target effect effect_seq b2r b2g b2b game_* clip_* answer_to adv_ds
         mp_state_t one = { 0 };
         uint8_t *p = f == 0 ? &one.origin : f == 1 ? &one.seq : f == 2 ? &one.ttl : f == 3 ? &one.flags
                    : f == 4 ? &one.r : f == 5 ? &one.g : f == 6 ? &one.b : f == 11 ? &one.target
                    : f == 12 ? &one.effect : f == 13 ? &one.effect_seq : f == 14 ? &one.b2r : f == 15 ? &one.b2g
                    : f == 16 ? &one.b2b : f == 17 ? &one.game_seq : f == 18 ? &one.game_starter
                    : f == 19 ? &one.game_left : f == 20 ? &one.game_pick : f == 21 ? &one.clip_id
-                   : f == 22 ? &one.clip_ds : f == 23 ? &one.answer_to : &one.ver[f - 7];
+                   : f == 22 ? &one.clip_ds : f == 23 ? &one.answer_to : f == 24 ? &one.adv_ds : &one.ver[f - 7];
         *p = (uint8_t)(0x80 + f);
         uint8_t ad[30];
         mp_state_t back;
@@ -457,6 +456,103 @@ static void test_cadence(void)
     CHECK(mp_adv_interval_ms(15, true) == 20, "15 peers after a change: 20 ms");
 }
 
+// Byte 29: the sender's advertising interval in 10 ms steps (0 = old firmware, 20 ms). A slow sender (the Android
+// app advertises every 100 ms at best) keeps its hold for 3 intervals + 100 ms, so one or two missed adverts do not
+// drop its colour out of the mix; 0 and 2 keep the table's 250 ms; the expiry is capped at MP_HOLD_EXPIRY_MAX_MS.
+static void test_slow_sender(void)
+{
+    static const uint8_t A[6] = { 1, 2, 3, 4, 5, 6 }, B[6] = { 9, 9, 9, 9, 9, 9 }, C[6] = { 7, 7, 7, 7, 7, 7 };
+    mp_state_t one = { 0 };
+    one.adv_ds = 10;
+    uint8_t ad[30];
+    mp_state_t back;
+    CHECK(mp_encode(&one, ad, sizeof(ad)) == 30 && ad[29] == 10, "byte 29 carries the interval");
+    CHECK(mp_decode_ad(ad, 30, &back) && back.adv_ds == 10, "byte 29 round trip");
+
+    CHECK(mp_hold_expiry_ms(0, 250) == 250 && mp_hold_expiry_ms(2, 250) == 250, "20 ms or unknown: 250 ms");
+    CHECK(mp_hold_expiry_ms(10, 250) == 400, "100 ms: 400 ms");
+    CHECK(mp_hold_expiry_ms(255, 250) == MP_HOLD_EXPIRY_MAX_MS, "capped");
+    CHECK(mp_hold_expiry_ms(0, 600) == 600, "a longer table expiry is kept");
+
+    mp_table_t t;
+    mp_table_init(&t, 0, 0);
+    mp_state_t slow = state(1, MP_F_HOLDING, 0, 0, 255), fast = state(1, MP_F_HOLDING, 255, 0, 0),
+               old = state(1, MP_F_HOLDING, 0, 255, 0);
+    slow.adv_ds = 10;
+    fast.adv_ds = 2;
+    mp_table_update(&t, A, &slow, 0, 1000);
+    mp_table_update(&t, B, &fast, 0, 1000);
+    mp_table_update(&t, C, &old, 0, 1000);
+    CHECK(mp_table_expire(&t, 1300) == 2 && mp_holders(&t) == 1, "at 300 ms only the 100 ms sender still holds");
+    CHECK(t.peers[0].st.flags & MP_F_HOLDING, "and it is the slow one");
+    CHECK(mp_table_expire(&t, 1399) == 0 && mp_holders(&t) == 1, "still holding at 399 ms");
+    CHECK(mp_table_expire(&t, 1400) == 1 && mp_holders(&t) == 0, "cleared at 400 ms");
+}
+
+// tests/fixtures/mesh_vectors.txt: adverts, mixes and hold expiries the Android app's tests check too (MeshProtoTest.kt),
+// so the app and the boards keep the same rules. Run from tests/host (make does).
+static void test_vectors(void)
+{
+    FILE *f = fopen("../fixtures/mesh_vectors.txt", "r");
+    CHECK(f != NULL, "open ../fixtures/mesh_vectors.txt");
+    if (!f) return;
+    char line[512];
+    int n_ad = 0, n_mix = 0, n_hold = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "ad ", 3)) {
+            uint8_t ad[30], back[30];
+            unsigned v[25];
+            const char *p = line + 3;
+            for (int i = 0; i < 30; i++, p += 2) { unsigned x; sscanf(p, "%2x", &x); ad[i] = (uint8_t)x; }
+            int used = 0, k = 0;
+            for (; k < 25 && sscanf(p, " %u%n", &v[k], &used) == 1; k++) p += used;
+            mp_state_t st;
+            CHECK(k == 25 && mp_decode_ad(ad, 30, &st), "vector ad %d decodes", n_ad);
+            const uint8_t got[25] = { st.origin, st.seq, st.ttl, st.flags, st.r, st.g, st.b, st.ver[0], st.ver[1],
+                                      st.ver[2], st.ver[3], st.target, st.effect, st.effect_seq, st.b2r, st.b2g, st.b2b,
+                                      st.game_seq, st.game_starter, st.game_left, st.game_pick, st.clip_id, st.clip_ds,
+                                      st.answer_to, st.adv_ds };
+            bool ok = true;
+            for (int i = 0; i < 25; i++) ok = ok && got[i] == v[i];
+            CHECK(ok, "vector ad %d fields", n_ad);
+            CHECK(mp_encode(&st, back, 30) == 30 && !memcmp(back, ad, 30), "vector ad %d encodes back", n_ad);
+            n_ad++;
+        } else if (!strncmp(line, "mix ", 4)) {
+            const char *p = line + 4;
+            int k = 0, used = 0;
+            sscanf(p, "%d%n", &k, &used);
+            p += used;
+            mp_table_t t;
+            mp_table_init(&t, 0, 0);
+            for (int i = 0; i < k; i++) {
+                unsigned r, g, b;
+                sscanf(p, " %u %u %u%n", &r, &g, &b, &used);
+                p += used;
+                uint8_t a[6] = { (uint8_t)i, 1, 2, 3, 4, 5 };
+                mp_state_t s = { 0 };
+                s.flags = MP_F_HOLDING;
+                s.r = (uint8_t)r;
+                s.g = (uint8_t)g;
+                s.b = (uint8_t)b;
+                mp_table_update(&t, a, &s, 0, 0);
+            }
+            unsigned wr, wg, wb;
+            sscanf(p, " = %u %u %u", &wr, &wg, &wb);
+            uint8_t o[3];
+            mix_of(&t, o);
+            CHECK(o[0] == wr && o[1] == wg && o[2] == wb, "vector mix %d", n_mix);
+            n_mix++;
+        } else if (!strncmp(line, "hold ", 5)) {
+            unsigned ds, tbl, want;
+            sscanf(line + 5, "%u %u = %u", &ds, &tbl, &want);
+            CHECK(mp_hold_expiry_ms((uint8_t)ds, tbl) == want, "vector hold %u %u", ds, tbl);
+            n_hold++;
+        }
+    }
+    fclose(f);
+    CHECK(n_ad >= 8 && n_mix >= 20 && n_hold >= 8, "vectors read: %d ads, %d mixes, %d holds", n_ad, n_mix, n_hold);
+}
+
 int main(void)
 {
     test_payload();
@@ -464,5 +560,7 @@ int main(void)
     test_table();
     test_mix();
     test_cadence();
+    test_slow_sender();
+    test_vectors();
     return check_done("mesh");
 }

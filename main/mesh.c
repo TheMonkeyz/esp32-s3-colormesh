@@ -349,7 +349,8 @@ static void do_refresh(void)
     s.target = target;
     s.effect = own_effect;
     s.effect_seq = own_effect_seq;
-    uint32_t b2 = own_b2;                            // bytes 19-21: 0, 0, 0 = automatic
+    s.adv_ds = (adv_fallback ? ADV_ITVL_SLOW : ADV_ITVL_FAST) * 5u / 80u;   // byte 29: 2 (20 ms) or 10 (100 ms)
+    uint32_t b2 = own_b2;                           // bytes 19-21: 0, 0, 0 = automatic
     if (b2) {
         s.b2r = (uint8_t)(b2 >> 16);
         s.b2g = (uint8_t)(b2 >> 8);

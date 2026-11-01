@@ -34,6 +34,7 @@ int mp_encode(const mp_state_t *s, uint8_t *buf, int cap)
     buf[26] = s->clip_id;
     buf[27] = s->clip_ds;
     buf[28] = s->answer_to;
+    buf[29] = s->adv_ds;
     return MP_AD_SIZE;
 }
 
@@ -63,6 +64,7 @@ bool mp_decode(const uint8_t *mfg, int len, mp_state_t *out)
     s.clip_id = mfg[24];
     s.clip_ds = mfg[25];
     s.answer_to = mfg[26];
+    s.adv_ds = mfg[27];
     *out = s;
     return true;
 }
@@ -195,6 +197,13 @@ bool mp_table_update(mp_table_t *t, const uint8_t addr[6], const mp_state_t *st,
     return changed;
 }
 
+uint32_t mp_hold_expiry_ms(uint8_t adv_ds, uint32_t table_ms)
+{
+    uint32_t ms = 3u * 10u * adv_ds + 100u;
+    if (ms < table_ms) ms = table_ms;
+    return ms > MP_HOLD_EXPIRY_MAX_MS ? MP_HOLD_EXPIRY_MAX_MS : ms;
+}
+
 int mp_table_expire(mp_table_t *t, uint32_t now_ms)
 {
     int n = 0;
@@ -205,7 +214,7 @@ int mp_table_expire(mp_table_t *t, uint32_t now_ms)
         if (age >= t->peer_expiry_ms) {
             p->used = false;
             n++;
-        } else if ((p->st.flags & MP_F_HOLDING) && age >= t->hold_expiry_ms) {
+        } else if ((p->st.flags & MP_F_HOLDING) && age >= mp_hold_expiry_ms(p->st.adv_ds, t->hold_expiry_ms)) {
             p->st.flags &= (uint8_t)~MP_F_HOLDING;
             n++;
         }

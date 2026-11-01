@@ -12,7 +12,9 @@
 //   22-25 rock paper scissors (rps.h): 22 round seq (0 = no round), 23 the round's starter origin, 24 time left to
 //   the reveal in RPS_LEFT_UNIT_MS steps (0 after it), 25 the sender's pick (rps_pick_t) · 26 voice clip id (bumped
 //   per clip, wrap-aware; sent with MP_F_CLIP while the clip's periodic train runs, clip.c) · 27 the clip's length
-//   in 100 ms steps · 28 with effect MP_EFFECT_ANSWER: the origin of the caller answered (else 0) · 29 reserved, zero.
+//   in 100 ms steps · 28 with effect MP_EFFECT_ANSWER: the origin of the caller answered (else 0) · 29 the sender's
+//   advertising interval in 10 ms steps (0 = not sent: firmware before v0.7.0, which advertises every 20 ms; the
+//   Android app sends 10), so a slow sender's hold lasts longer (mp_hold_expiry_ms).
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -44,7 +46,8 @@
 #define MP_EFFECT_RING          6   // a call: every board that hears it rings (clip.c), no wave
 #define MP_EFFECT_ANSWER        7   // an answer to the call of the board in byte 28 (clip.c)
 #define MP_MAX_PEERS    16
-#define MP_HOLD_EXPIRY_MS 250     // 3 x 20 ms + 100 ms margin, rounded; 400 once the 100 ms interval is in use
+#define MP_HOLD_EXPIRY_MS 250     // 3 x 20 ms + 100 ms margin, rounded; longer for a slower sender (byte 29)
+#define MP_HOLD_EXPIRY_MAX_MS 1000  // the longest hold a slow sender's byte 29 can ask for
 #define MP_PEER_EXPIRY_MS 10000
 #define MP_SEQ_RESET_REPORTS 3    // consecutive "older" reports from one address = it rebooted: adopt its seq
 #define MP_ADV_FAST_MS  20
@@ -58,6 +61,7 @@ typedef struct mp_state {
     uint8_t game_seq, game_starter, game_left, game_pick;
     uint8_t clip_id, clip_ds;         // bytes 26-27 (not part of mp_table_update's "changed" either)
     uint8_t answer_to;                // byte 28 (idem)
+    uint8_t adv_ds;                   // byte 29: the sender's advertising interval in 10 ms steps, 0 = unknown (idem)
 } mp_state_t;
 
 // The AD structure into buf: MP_AD_SIZE, or -1 if cap is smaller (or an argument is NULL)
@@ -93,7 +97,10 @@ void mp_table_init(mp_table_t *t, uint32_t hold_expiry_ms, uint32_t peer_expiry_
 // older seq is ignored (last_ms and rssi are still refreshed) unless MP_SEQ_RESET_REPORTS come in a row; an equal
 // seq re-applies the state. A full table replaces the least recently heard peer.
 bool mp_table_update(mp_table_t *t, const uint8_t addr[6], const mp_state_t *st, int8_t rssi, uint32_t now_ms);
-// A holder not heard for hold_expiry_ms stops holding; a peer not heard for peer_expiry_ms leaves the table.
+// How long a holder with byte 29 = adv_ds keeps its hold unheard: 3 intervals + 100 ms, at least table_ms (the table's
+// hold_expiry_ms), at most MP_HOLD_EXPIRY_MAX_MS
+uint32_t mp_hold_expiry_ms(uint8_t adv_ds, uint32_t table_ms);
+// A holder not heard for mp_hold_expiry_ms(its byte 29, hold_expiry_ms) stops holding; a peer not heard for peer_expiry_ms leaves the table.
 // Returns the number of changes (holders cleared + peers removed).
 int  mp_table_expire(mp_table_t *t, uint32_t now_ms);
 int  mp_table_count(const mp_table_t *t);
