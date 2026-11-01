@@ -219,6 +219,7 @@ Estimates from the research (to replace with `idf.py size` and the `heap` comman
 | `mesh: answer to <origin>` / `mesh: answer from <addr>`, `clip: call answered by <origin> (<n> so far)`, `clip: call over, <n> answered`, `clip: answered sound played`, `clip: call not answered` | The answer sent / received by the caller |
 | `ui: overlay message\|call\|calling\|answered\|off` | The incoming clip or call screen |
 | `mesh: clip <id> from phone <origin> (sid <n>), <s> s, <k> kHz` | The Android app's clip beacon heard: syncing to its train |
+| `clip: clip <id> from <origin> complete, ... (<n> chunks heard of <total>, synced after <ms> ms, whole after <ms> ms)` | Any received clip, with the receive numbers (the dropped line has `heard` and `synced after` too) |
 | `diag: mark app ready` | `forge.json` `ready_line` |
 
 ## Known issues / TODO
@@ -338,9 +339,13 @@ iOS does not let an app advertise manufacturer data.
   the boards hand it to `clip.c` (`mesh_set_beacon_hook`), which syncs to that report's address and SID. Android
   refuses periodic data in several HCI fragments while the train runs (`COMMAND_DISALLOWED`, Pixel 8 Pro), so the
   phone sends **one chunk per 100 ms** (2.2 KB/s, a board 22 KB/s): it records at **8 kHz**, says so in the beacon,
-  and the boards double the samples (`clip_upsample2`). Two rounds; a 5 s clip arrives in about 9 s. The boards
-  also put long periodic packets back together (`clip_frag_*`) and read every chunk AD in one (company ids
-  0xFFxx), ready for a phone that can send more per packet.
+  and the boards double the samples (`clip_upsample2`). The phone holds the first packet 1.5 s (the boards sync
+  only after the beacon: 0.2-0.6 s measured) and changes the packet every **125 ms** (`Clip.PKT_MS`, ~132 ms with the
+  33 ms frame): at 100 ms, the same as the train's interval, Android sometimes replaced a packet before it went out
+  once, and one chunk in 52 was missing after 2 and after 3 rounds. Two rounds; the boards play as soon as the clip
+  is whole. Measured on board A (v0.7.0-rc.2): 2.8 s clip whole after 8.5 s, 3.9 s after 18 s, 4.9 s after 15 s,
+  0 holes, all three boards played. The boards also put long periodic packets back together (`clip_frag_*`) and
+  read every chunk AD in one (company ids 0xFFxx), ready for a phone that can send more per packet.
 - The phone cannot play the boards' clips: Android has no public API to sync to another device's periodic train.
 - Signing: one release key outside the repo (`C:\Users\lmathieu\ESPDEV\keys\colormesh-android.jks`, its
   passwords in the `.txt` beside it), in CI from the `CM_KEYSTORE_*` secrets; the same key every release, so an

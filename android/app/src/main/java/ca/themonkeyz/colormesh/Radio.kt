@@ -170,10 +170,10 @@ class Radio(
 
     private var clipLastMs = 0L
 
-    // Called every frame by the activity while a clip goes out: the next packet once per periodic interval (100 ms)
+    // Called every frame by the activity while a clip goes out: the next packet every Clip.PKT_MS
     fun clipTick(nowMs: Long) {
         val s = clipSet ?: return
-        if (clipBusy || nowMs - clipLastMs < 100) return
+        if (clipBusy || nowMs - clipLastMs < Clip.PKT_MS) return
         clipLastMs = nowMs
         if (clipNext >= clipPkts.size) { clipEnd(true); return }
         clipBusy = true

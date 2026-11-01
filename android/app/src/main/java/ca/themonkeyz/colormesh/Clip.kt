@@ -14,9 +14,11 @@ object Clip {
     const val HDR = 20
     const val CHUNK_DATA = 224
     const val PKT_MAX = HDR + CHUNK_DATA
-    const val ROUNDS = 3                   // every chunk 3 times (2 lost one chunk in 52 on a board): the boards play
-                                           // as soon as the clip is whole
-    const val LEAD = 15                    // the first packet held this many intervals (1.5 s): the boards sync to the
+    const val ROUNDS = 2                   // every chunk twice (one round was whole on a board once PKT_MS was 125):
+                                           // the boards play as soon as the clip is whole
+    const val PKT_MS = 125L                // a new packet this often: the train sends every 100 ms, and a new packet
+                                           // every 100 ms was sometimes replaced before it went out once (jitter)
+    const val LEAD = 12                    // the first packet held this many packets (1.5 s): the boards sync to the
                                            // train only after they hear the beacon
     const val PEAK_TARGET = 26000
     const val MAX_BOOST = 8

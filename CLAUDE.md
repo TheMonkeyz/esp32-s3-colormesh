@@ -151,7 +151,8 @@ rediscover.
 - Android app (v0.7.0): the user's phone is a Pixel 8 Pro, Android 17, paired for wireless debugging (`adb mdns
   services` finds it; the pairing port the phone shows can be mistyped). Android advertises every 100 ms at best,
   sends periodic data only in one HCI command (251 bytes) while the train runs, and gives every advertising set its
-  own random address and SID. Build and adb recipes: docs/TESTING.md §7b. Signing key: `..\keys\colormesh-android.jks`
+  own random address and SID; a new periodic packet every 100 ms (= the train's interval) loses packets to jitter,
+  125 ms does not (rc.2). Build and adb recipes: docs/TESTING.md §7b. Signing key: `..\keys\colormesh-android.jks`
   (outside the repo); the CI secrets `CM_KEYSTORE_B64`, `CM_KEYSTORE_PASS`, `CM_KEY_ALIAS`, `CM_KEY_PASS`.
 - A board with a label the peers already hold does not serve them again (`not newer`): every build the boards pull
   consumes its label (rc.2-rc.4 on 2026-10-31). Probe before letting a full pull complete.
