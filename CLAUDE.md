@@ -5,6 +5,10 @@ Read first, in this order: `README.md`, `docs/WORKFLOW.md` (the loop), `docs/TES
 `docs/COMPONENTS.md` (the framework's components), then this project's `docs/HISTORY.md` and
 `docs/ARCHITECTURE.md` once they exist (templates in `docs/templates/`). Project values (app name, repo, OTA site,
 screens, build dir) are in `forge.json`.
+`docs/DIAGRAMS.md` is the picture of it all in levels (one Mermaid diagram per section, a "Zoom in" list naming
+boxes by id; `docs/diagrams.html`, preview config `diagrams`, reads it as is): update it when a flow or a module
+changes, run `python tools/check_diagrams.py` (CI does too) and render-check every block in the explorer (a `;`
+inside a sequence-diagram message breaks it).
 
 ## The loop
 

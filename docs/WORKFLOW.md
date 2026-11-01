@@ -60,6 +60,7 @@ When the user says it (often "document and commit, then release rc"):
 | File | What goes in |
 |---|---|
 | `docs/ARCHITECTURE.md` | How it works now, and why that way (the alternative that failed, with numbers). |
+| `docs/DIAGRAMS.md` | The picture, when a flow, a module or a message changed: edit the level's diagram, run `python tools/check_diagrams.py`, render-check it in `docs/diagrams.html`. |
 | `docs/TESTING.md` (project section) or the harness | How to check it again. |
 | `CLAUDE.md` | The bug (symptom, cause, fix, test), a new user preference, a useful fact. A general lesson goes to `docs/LESSONS.md`. |
 | `docs/DIAGNOSTICS.md` | New reference numbers, if memory or timing changed. |

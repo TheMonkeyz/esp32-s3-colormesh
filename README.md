@@ -96,9 +96,10 @@ tools/devloop/                  flash helpers (PowerShell, Python), devloop.py, 
 tools/harness/                  harness.py, board.py, core_suites.py, app_suites.py, baseline.json, reports/
 tools/diag_summary.py           summary of the diag: lines in a log
 tools/make_flasher_site.py      release parts (dist) and the Pages flasher site (site)
+tools/check_diagrams.py         the rules docs/DIAGRAMS.md must follow for the explorer (CI runs it)
 web/flash/                      the Pages site: index.html, config.js (Configure over USB), config.test.js
 tests/host/                     C unit tests with gcc + AddressSanitizer (WSL / Linux)
-docs/                           architecture, history, research, workflow, testing, releasing, lessons, protocol
+docs/                           diagrams (levelled, with the zoomable explorer diagrams.html), architecture, history, research, workflow, testing, releasing, lessons, protocol
 .claude/                        Claude Code permissions and skills
 .github/                        CI (build, tests, releases, Pages) and Dependabot
 ```
@@ -108,6 +109,7 @@ docs/                           architecture, history, research, workflow, testi
 | File | What |
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | Rules and setup for agent sessions; the project's bugs, preferences and facts grow here |
+| [docs/DIAGRAMS.md](docs/DIAGRAMS.md) | Start here: pictures of how it fits together, in levels you zoom into (the whole system, the mesh, the updates, then their details). `docs/diagrams.html` shows them with pan, zoom and click-to-zoom-in |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The boards, the Bluetooth design, the modules, the log-line contract, memory |
 | [docs/HISTORY.md](docs/HISTORY.md) | How the project got here; open threads |
 | [docs/RESEARCH-BLE.md](docs/RESEARCH-BLE.md) | The research report that chose the design; its notes in [docs/research/](docs/research/) |

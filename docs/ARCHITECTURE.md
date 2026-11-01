@@ -6,7 +6,8 @@ describe here only how this app uses them. -->
 
 ColorMesh: three (later more) boards share colours over Bluetooth LE. No Wi-Fi: forge_net is linked (forge_lvgl's
 `screens.h` needs one of its structs) but never started. Configuration and updates come over USB from the Pages
-site, or over Bluetooth from a peer in dev mode. Design chosen by [RESEARCH-BLE.md](RESEARCH-BLE.md).
+site, or over Bluetooth from a peer in dev mode. Design chosen by [RESEARCH-BLE.md](RESEARCH-BLE.md). The same
+design as pictures, in levels you zoom into: [DIAGRAMS.md](DIAGRAMS.md) (`diagrams.html` is its explorer).
 
 ## Hardware (Waveshare ESP32-S3-Touch-AMOLED-1.75, three of them)
 

@@ -130,3 +130,14 @@ with the signed length and digest, the image's own version must equal the signed
 compared before esp_ota_end. Lesson: a post-release test label only ranks above a release (`vX.Y.Z-N-g...`), never
 above an rc; use the next rc number for signed-pull tests.
 
+## 2026-11-01: the atlas, levelled diagrams of the whole project
+
+The user asked for a thorough documentation in the zoomable style of aws-delocalized-backups: `docs/DIAGRAMS.md`,
+21 Mermaid diagrams in levels (the whole system; one board, its modules, screens and tasks; the mesh: the 20 ms
+flood, the 30 bytes on air, the peer table and the mix, effects, the voice train; updates: who pulls from whom,
+the firmware link packet by packet, boot and rollback, the paired admin board, version order; the PC side; a tag
+to the boards), each section with one diagram and a "Zoom in" list naming boxes by id; `docs/diagrams.html`, the
+explorer copied from that project (pan, zoom, click-to-zoom-in, breadcrumbs, a map), reads the file as is;
+`tools/check_diagrams.py` keeps the levels navigable (one diagram per section, real boxes and sections, every
+level reachable and on the map, no `;` in a sequence message, no Mermaid keyword as a node id) and CI's host-tests
+job runs it. All 21 diagrams render-checked in the browser.
