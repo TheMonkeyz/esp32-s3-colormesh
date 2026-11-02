@@ -5,6 +5,12 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.8.0-rc.2 - 2026-11-01
+- The phone app now plays the boards' voice messages: "Receiving…" while a board talks, then the message as soon as
+  it is whole, 2 to 5 s after the board's finger lifts (the boards play at the same time). The boards must run this
+  version for the phone to hear them. Android 12 or newer; tested on a Pixel 8 Pro with Android 17.
+- Everything in rc.1.
+
 ## v0.8.0-rc.1 - 2026-11-01
 - New page order, left to right: colour choice, the mesh, voice and calls, rock paper scissors, system.
 - The colour choice, voice and game pages show the mesh behind them: the mixed colour while someone holds, and the
