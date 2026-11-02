@@ -5,6 +5,22 @@ version it offers (`notes.json`, built by `tools/make_flasher_site.py`). Add a `
 the top before tagging, one `- ` line per change; release candidates get their own `## vX.Y.Z-rc.N` section and the
 final release's section lists everything again.
 
+## v0.8.0 - 2026-11-01
+Fifth release. Everything in v0.4.0 plus:
+- Voice: swipe to the voice page, hold the screen and talk (up to 5 s), let go: every board in range plays it at
+  once, with "Message" in your colour.
+- Calls: the green Call button rings every other board with the classic phone tune; a touch answers, and the
+  caller sees everyone who answered, one dot per board in its colour, with a short rising doo-di-dit each.
+- Rock paper scissors: tap to start a round on every board near you; "Rock, Paper, Scissors!" counts down 3 s; tap
+  your pick before 0; every board shows the result at the same moment.
+- A phone joins the boards: the ColorMesh app for Android (download it from this page). Touch the circle to send
+  your colour, tap it for a wave, call the boards, answer their calls, hold "Hold to talk" to send a voice message,
+  and hear the boards' voice messages (Android 12 or newer).
+- Pages, left to right: colour choice, the mesh, voice and calls, rock paper scissors, system. The colour choice,
+  voice and game pages show the mesh behind them, smooth and without tearing; texts are white with a black outline.
+- The boards keep a slow sender's colour steady (the phone sends every 100 ms, a board every 20 ms).
+- Bluetooth uses extended advertising: this version is needed on every board for voice, calls and the phone.
+
 ## v0.8.0-rc.2 - 2026-11-01
 - The phone app now plays the boards' voice messages: "Receiving…" while a board talks, then the message as soon as
   it is whole, 2 to 5 s after the board's finger lifts (the boards play at the same time). The boards must run this
