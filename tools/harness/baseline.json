@@ -1,13 +1,13 @@
 {
  "boot_s.ready": {
-  "max": 3.4,
-  "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 2.4
+  "max": 4.9,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 3.5
  },
  "drag_first_frame_ms": {
   "max": 21.0,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 15
+  "ref": 17
  },
  "failed_allocs": {
   "max": 0.0,
@@ -20,19 +20,19 @@
   "ref": 1
  },
  "internal_free_kb": {
-  "min": 111.8,
-  "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 149
+  "min": 67.5,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 90
  },
  "internal_largest_kb": {
-  "min": 58.5,
-  "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 78
+  "min": 23.2,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 31
  },
  "internal_min_kb": {
-  "min": 99.8,
-  "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 133
+  "min": 54.8,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 73
  },
  "lvgl_internal_fallbacks": {
   "max": 0.0,
@@ -42,22 +42,17 @@
  "psram_min_kb": {
   "min": 3839.2,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 5119
+  "ref": 4966
  },
  "snapshot_ms.game": {
   "max": 1400.0,
   "note": "set by hand from `shot game 2` on board A (v0.5.0-rc.1, about 1000 ms); refine with --update-baseline",
-  "ref": 1000
- },
- "snapshot_ms.voice": {
-  "max": 1400.0,
-  "note": "set by hand like game: `shot voice 2` on board A (v0.6.0-rc.7) sends the same 233x233 picture; refine with --update-baseline",
-  "ref": 1000
+  "ref": 852
  },
  "snapshot_ms.main": {
   "max": 1486.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 1062
+  "ref": 850
  },
  "snapshot_ms.message": {
   "max": 1206.8,
@@ -67,56 +62,61 @@
  "snapshot_ms.pick": {
   "max": 1185.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 847
+  "ref": 848
  },
  "snapshot_ms.system": {
   "max": 1197.0,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 855
+  "ref": 863
+ },
+ "snapshot_ms.voice": {
+  "max": 1400.0,
+  "note": "set by hand like game: `shot voice 2` on board A (v0.6.0-rc.7) sends the same 233x233 picture; refine with --update-baseline",
+  "ref": 1000
  },
  "swipe_fps.drag_slow": {
   "min": 45.0,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 55.0
+  "ref": 54.1
  },
  "swipe_fps.main_to_voice": {
   "min": 43.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 55.0
+  "ref": 48.6
  },
  "swipe_fps.voice_to_main": {
   "min": 44.8,
   "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 55.0
+  "ref": 46.9
  },
  "swipe_gap_max_ms.drag_slow": {
-  "max": 57.4,
-  "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 41
+  "max": 133.0,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 94
  },
  "swipe_gap_max_ms.main_to_voice": {
-  "max": 58.8,
-  "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 42
+  "max": 134.4,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 91
  },
  "swipe_gap_max_ms.voice_to_main": {
-  "max": 44.8,
-  "note": "proposed by --update-baseline: check the limit and the direction",
-  "ref": 32
+  "max": 134.4,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 96
  },
  "swipe_render_avg_ms.drag_slow": {
   "max": 4.5,
   "note": "TE-locked swipes (59 Hz) count fewer raw frames, so LVGL repaints weigh more (2026-10-31)",
-  "ref": 3.0
+  "ref": 1.6
  },
  "swipe_render_avg_ms.main_to_voice": {
   "max": 4.5,
   "note": "TE-locked swipes (59 Hz) count fewer raw frames, so LVGL repaints weigh more (2026-10-31)",
-  "ref": 3.0
+  "ref": 3.5
  },
  "swipe_render_avg_ms.voice_to_main": {
-  "max": 4.5,
-  "note": "TE-locked swipes (59 Hz) count fewer raw frames, so LVGL repaints weigh more (2026-10-31)",
-  "ref": 3.0
+  "max": 6.3,
+  "note": "voice series (v0.6.0+: I2S both ways, extended advertising, clip buffers; waves behind every page): measured on v0.8.0-rc.2, 2026-11-01",
+  "ref": 4.5
  }
 }
