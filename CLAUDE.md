@@ -128,6 +128,9 @@ Add each preference the user states (gestures, wording, timing, look) with the d
   circle, swatches, Call, Hold to talk); phone voice clips at **8 kHz** ("half quality, 2x faster" over 16 kHz).
 - 2026-11-01: fingers land low on the voice page's Call button (rc.6 missed a press 21 px under it): keep its touch
   margin large and never start a recording near it.
+- 2026-11-01, the phone hears the boards' clips: the user chose to **try Android's hidden periodic sync** (instant,
+  like the boards; no firmware change expected) over a GATT pull from a board (public API, 1-3 s late); it works on
+  the Pixel 8 Pro with Android 17 and is kept. The boards' train advert now carries a beacon for it.
 
 ## Useful facts
 
@@ -163,3 +166,11 @@ rediscover.
   (outside the repo); the CI secrets `CM_KEYSTORE_B64`, `CM_KEYSTORE_PASS`, `CM_KEY_ALIAS`, `CM_KEY_PASS`.
 - A board with a label the peers already hold does not serve them again (`not newer`): every build the boards pull
   consumes its label (rc.2-rc.4 on 2026-10-31). Probe before letting a full pull complete.
+- Phone hears clips (v0.8.0-rc.2, 2026-11-01): Android 17 has no `PeriodicAdvertisingManager` (dump the phone's
+  `/apex/com.android.bt/javalib/framework-bluetooth.jar` with `dexdump` to see what a release has); the app calls
+  `IBluetoothScan.registerSync` through HiddenApiBypass 6.1 `invoke` (works on 17) with its own Binder as the callback
+  (`Hidden.kt`, `Radio.kt` SyncBinder; codes 1 established, 2 report, 3 lost). Android reports an extended advert only
+  when it carries data: the boards' train advert carries the 'T' beacon for that (L215, L216). Measured: sync
+  180-300 ms after the flood flag, a 5 s clip whole after 3.6-5.3 s. Only boards on v0.8.0-rc.2 or later can be heard.
+- `gradlew.bat` from the Claude desktop app's shells needs `$env:ANDROID_HOME` (the SDK path) as well as `JAVA_HOME`;
+  `cmake -U PROJECT_VER build\v55` clears a cached firmware label (it held v0.6.0-rc.8 on 2026-11-01, see above).

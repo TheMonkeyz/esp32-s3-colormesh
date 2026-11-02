@@ -210,6 +210,20 @@ no Android Studio. In PowerShell, from `android/`:
   `adb logcat -s colormesh`: `advertising 100 ms`, `peers=N holders=N sent=N heard=N` every 10 s, `advert origin=..
   seq=.. hold=.. rgb=.. effect=../..` per change, `ring from`, `answer from`, `wave k from`, `clip N: ms, bytes,
   packets`, `clip sent ok=true packets=n/n refused=0`.
+- **Hearing a board's clip** (v0.8.0-rc.2): the app in front; on board A's console `clip rec 5000` (records 5 s
+  from its microphones and sends it), then `clip send` for the same clip again. logcat: `clip N from 9a (B8:…),
+  5.0 s: looking for its train`, `extended report of B8:… after 80 ms: sid=1 interval=8x1.25ms … 10 bytes
+  beacon=true`, `registerSync sent`, `sync status=0 … after 300 ms`, `first chunk after … (179 chunks, 40000
+  bytes)`, `whole after 3630 ms, 179 chunks, 40000 bytes, 329 heard, crc ok, 16 kHz`, `playing 5000 ms at 16 kHz`;
+  the phone shows "Receiving…", then "Playing…". Failures: `dropped: no sync within 4000 ms (scan: N reports, M
+  legacy from the sender)` (the sender's train advert has no beacon: a board on firmware before v0.8.0-rc.2),
+  `cannot hear clips: <why>` (the hidden call failed on this Android), `train lost`, `CRC mismatch`; the phone
+  shows "did not arrive". The board's side is unchanged (`clip: send …`, `clip: sent …`). A script that restarts
+  A, records, sends and prints both logs: the 2026-11-01 session's `clip_test.py` (reboot, `clip rec`, `clip send`,
+  `adb logcat -d -s colormesh`).
+- From the Claude desktop app's shells `gradlew.bat` needs `$env:ANDROID_HOME = "$env:USERPROFILE\AppData\Local\Android\Sdk"`
+  as well as `JAVA_HOME` (the repo has no `local.properties`). The `hidden` module (compile-only stubs of Android's
+  hidden periodic sync types) builds with the app; nothing of it ships in the APK.
 - A tap or a hold from the PC: `adb shell input tap X Y`, `adb shell input swipe X Y X Y 2000` (a 2 s press), with X Y
   from `adb exec-out screencap -p > shot.png`.
 - On the boards: A's log shows the phone as `mesh: peer <random addr> v0.0.0-0 #rrggbb hold|idle`, its waves and

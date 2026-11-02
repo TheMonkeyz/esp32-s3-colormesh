@@ -1245,3 +1245,31 @@ Fix: scan less while a connection must carry data (ColorMesh: 30 ms of every 100
 receiver, `mesh_set_scan_window()`), and give the sender a probe mode (stop after N KB, the peer retries) so link
 settings can be compared in minutes without re-flashing the receiving boards.
 Check: the sender's `fw: served … stream ≥ 40 KB/s` line with `mesh: peer` lines still arriving during the transfer.
+
+## The phone hears the boards' clips (esp32-s3-colormesh v0.8.0-rc.2, November 1)
+
+**L215. Android reports an extended advert only when it carries data.**
+Why: a BLE 5 periodic train's extended advert (ADV_EXT_IND / AUX_ADV_IND) carried the sync info alone, as NimBLE
+sends it when no `ble_gap_ext_adv_set_data` is made on the instance; the boards sync from the flood advert and never
+needed more. A Pixel 8 Pro's scanner never reported it to the app (530 reports in 4 s, 115 of them the sender's
+legacy flood, none from its train), with a filter on the sender's address and without. A 10-byte manufacturer AD on
+the same set was reported within 50-80 ms.
+Fix: give every extended set an AD, even a token one (ColorMesh: the train beacon, kind 'T', which the boards'
+parser ignores so nothing changes between boards). Match it in software: a scan filtered on the address found
+nothing even then.
+Check: the app's `extended report of <addr> … beacon=true` line within 100 ms of the flood flag.
+
+**L216. Android 17 removed the hidden periodic sync class: call the Bluetooth service, with your own Binder.**
+Why: `PeriodicAdvertisingManager` (hidden since Android 8) is gone from Android 17's framework-bluetooth.jar
+(`adb pull /apex/com.android.bt/javalib/framework-bluetooth.jar`, then `dexdump`: no class, no
+`BluetoothAdapter.getPeriodicAdvertisingManager`), so reflection on it fails with NoSuchMethodException and no
+hidden-API denial in the log. The service interface is still there: `IBluetoothScan.registerSync(ScanResult, skip,
+timeout, IPeriodicAdvertisingCallback, AttributionSource)`, the LE Audio broadcast assistant's path.
+Fix: `BluetoothAdapter.getBluetoothScan()` and `getAttributionSource()` through HiddenApiBypass 6.1 `invoke` (works
+on Android 17; `addHiddenApiExemptions` is not needed), the callback an app `Binder` implementing the hidden
+interface through a compile-only stub, reading the transactions itself (codes and parcel layouts from the phone's
+own jar: `dexdump -d` of the Stub's Proxy and of the report's `readFromParcel`). Keep the stubs out of the APK
+(`compileOnly`) and expect the next Android to move things again: log `why` and fall back to a message.
+Check: `sync status=0 … after N ms`, then `whole after … crc ok` on the phone; before trusting any hidden API on a
+new Android, dump the phone's jar and look for the member.
+

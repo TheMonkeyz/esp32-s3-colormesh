@@ -239,7 +239,7 @@ static void send_clip(void)
     tx_id++;
     set_phase(CLIP_SENDING);
     st.send_pct = 0;
-    if (mesh_clip_adv_start(PER_ITVL)) { set_phase(CLIP_IDLE); return; }
+    if (mesh_clip_adv_start(PER_ITVL, tx_id, tx_ds)) { set_phase(CLIP_IDLE); return; }
     mesh_set_clip(tx_id, tx_ds, true);
     ESP_LOGI(TAG, "send %u: %lu bytes, %u chunks x %d rounds", tx_id, (unsigned long)tx_len, total, CLIP_ROUNDS);
     static uint8_t pkt[CLIP_PKT_MAX];

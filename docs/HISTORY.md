@@ -141,3 +141,17 @@ explorer copied from that project (pan, zoom, click-to-zoom-in, breadcrumbs, a m
 `tools/check_diagrams.py` keeps the levels navigable (one diagram per section, real boxes and sections, every
 level reachable and on the map, no `;` in a sequence message, no Mermaid keyword as a node id) and CI's host-tests
 job runs it. All 21 diagrams render-checked in the browser.
+
+## 2026-11-01: the phone hears the boards' clips
+
+The user asked whether the Android app could receive the boards' voice clips. Two ways were laid out: Android's
+hidden periodic sync API (instant, like the boards, no firmware change, at the mercy of each Android release) or a
+GATT pull from a board (public API, 1-3 s late, work on both sides); the user chose to test the hidden one. The
+test found two walls: a Pixel 8 Pro never reports an extended advert without data (the boards' train advert carried
+the sync info alone), fixed with a 10-byte train beacon the boards ignore; and Android 17 has no
+`PeriodicAdvertisingManager` any more, worked around by calling the Bluetooth service's `IBluetoothScan.registerSync`
+through HiddenApiBypass with the app's own Binder as the callback, the transaction codes and parcel layouts read
+from the phone's own framework-bluetooth.jar. Board A's 5 s clips then played on the phone: synced in 0.2-0.3 s,
+whole after 3.6-5.3 s, CRC ok. The user tried it with a finger on A ("it works from A"). Lessons L215, L216; the
+GATT pull stays in reserve.
+

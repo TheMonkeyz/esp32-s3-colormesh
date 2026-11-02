@@ -22,4 +22,7 @@
     <string name="no_clips">This phone cannot send voice clips (no Bluetooth periodic advertising).</string>
     <string name="no_mic">No microphone</string>
     <string name="clip_failed">The voice clip did not go out.</string>
+    <string name="receiving">Receiving…</string>
+    <string name="playing">Playing…</string>
+    <string name="clip_lost">The voice clip did not arrive.</string>
 </resources>

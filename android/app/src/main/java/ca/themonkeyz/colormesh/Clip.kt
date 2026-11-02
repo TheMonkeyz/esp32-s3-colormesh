@@ -34,11 +34,24 @@ object Clip {
     )
     private val INDEX_ADJ = intArrayOf(-1, -1, -1, -1, 2, 4, 6, 8)
 
-    // adpcm_encode from a fresh state: n samples (n even) to n / 2 bytes
-    fun adpcmEncode(pcm: ShortArray): ByteArray {
+    // adpcm_state_t: one continuous stream. step() is step_apply, shared by both sides, so the encoder tracks what
+    // the decoder will hear.
+    class Adpcm {
         var pred = 0
         var index = 0
-        fun one(x: Int): Int {
+
+        fun step(code: Int): Int {
+            val s = STEPS[index]
+            var d = s shr 3
+            if (code and 4 != 0) d += s
+            if (code and 2 != 0) d += s shr 1
+            if (code and 1 != 0) d += s shr 2
+            pred = (if (code and 8 != 0) pred - d else pred + d).coerceIn(-32768, 32767)
+            index = (index + INDEX_ADJ[code and 7]).coerceIn(0, 88)
+            return pred
+        }
+
+        fun encodeOne(x: Int): Int {
             var step = STEPS[index]
             var diff = x - pred
             var code = 0
@@ -48,29 +61,39 @@ object Clip {
             if (diff >= step) { code = code or 2; diff -= step }
             step = step shr 1
             if (diff >= step) code = code or 1
-            // step_apply: track what the decoder will hear
-            val s = STEPS[index]
-            var d = s shr 3
-            if (code and 4 != 0) d += s
-            if (code and 2 != 0) d += s shr 1
-            if (code and 1 != 0) d += s shr 2
-            pred = (if (code and 8 != 0) pred - d else pred + d).coerceIn(-32768, 32767)
-            index = (index + INDEX_ADJ[code and 7]).coerceIn(0, 88)
+            step(code)
             return code
         }
+    }
+
+    // adpcm_encode from a fresh state: n samples (n even) to n / 2 bytes
+    fun adpcmEncode(pcm: ShortArray): ByteArray {
+        val s = Adpcm()
         val out = ByteArray(pcm.size / 2)
         for (i in 0 until pcm.size / 2) {
-            val lo = one(pcm[2 * i].toInt())
-            val hi = one(pcm[2 * i + 1].toInt())
+            val lo = s.encodeOne(pcm[2 * i].toInt())
+            val hi = s.encodeOne(pcm[2 * i + 1].toInt())
             out[i] = (lo or (hi shl 4)).toByte()
         }
         return out
     }
 
-    fun crc32(p: ByteArray): Long {
+    // adpcm_decode from a fresh state: n bytes to 2n samples (what a board plays)
+    fun adpcmDecode(code: ByteArray, n: Int = code.size): ShortArray {
+        val s = Adpcm()
+        val out = ShortArray(2 * n)
+        for (i in 0 until n) {
+            val b = code[i].toInt() and 0xFF
+            out[2 * i] = s.step(b and 0x0F).toShort()
+            out[2 * i + 1] = s.step(b shr 4).toShort()
+        }
+        return out
+    }
+
+    fun crc32(p: ByteArray, n: Int = p.size): Long {
         var c = 0xFFFFFFFFL
-        for (b in p) {
-            c = c xor (b.toLong() and 0xFF)
+        for (i in 0 until n) {
+            c = c xor (p[i].toLong() and 0xFF)
             repeat(8) { c = (c ushr 1) xor (0xEDB88320L and -(c and 1)) }
         }
         return c.inv() and 0xFFFFFFFFL
@@ -119,5 +142,96 @@ object Clip {
         if (peak == 0) return pcm
         val g = minOf(MAX_BOOST.toDouble(), PEAK_TARGET.toDouble() / peak).coerceAtLeast(1.0)
         return ShortArray(pcm.size) { (pcm[it] * g).toInt().coerceIn(-32768, 32767).toShort() }
+    }
+
+    // ---- receive (clip_chunks.c: clip_parse, clip_next_ad, clip_beacon_parse, clip_rx_*): what the phone collects
+    // from a sender's periodic train once Radio.listenClip has synced to it ----
+    const val MAX_BYTES = 64 * 1024
+    const val MAX_CHUNKS = (MAX_BYTES + CHUNK_DATA - 1) / CHUNK_DATA
+    const val FRAG_MAX = 2048              // one periodic packet put back together from its fragments
+    const val SYNC_WAIT_MS = 4000L         // no sync to the sender's train by then: give up (clip.c)
+    const val SYNC_TIMEOUT = 100           // 10 ms units: the train is lost after 1 s without a packet
+
+    class Pkt(val origin: Int, val id: Int, val chunk: Int, val total: Int, val len: Int, val crc: Long,
+              val data: ByteArray)
+    class Beacon(val origin: Int, val id: Int, val ds: Int, val khz: Int)
+
+    private fun u8(p: ByteArray, i: Int) = p[i].toInt() and 0xFF
+    private fun u16(p: ByteArray, i: Int) = u8(p, i) or (u8(p, i + 1) shl 8)
+    private fun u32(p: ByteArray, i: Int) = u16(p, i).toLong() or (u16(p, i + 2).toLong() shl 16)
+
+    // The ADs of a packet, each with its length byte; stops at a zero length or one that runs past the end
+    fun ads(p: ByteArray): List<ByteArray> {
+        val out = ArrayList<ByteArray>()
+        var off = 0
+        while (off < p.size && u8(p, off) != 0 && off + 1 + u8(p, off) <= p.size) {
+            val n = 1 + u8(p, off)
+            out.add(p.copyOfRange(off, off + n))
+            off += n
+        }
+        return out
+    }
+
+    // clip_parse: a well-formed clip chunk AD (any 0xFFxx company id, the header checked against itself), else null
+    fun parse(ad: ByteArray): Pkt? {
+        val n = ad.size
+        if (n < HDR + 1 || u8(ad, 0) + 1 != n || u8(ad, 1) != 0xFF || u8(ad, 3) != 0xFF ||
+            u8(ad, 4) != MeshProto.PROTO || u8(ad, 5) != KIND) return null
+        val chunk = u16(ad, 8)
+        val total = u16(ad, 10)
+        val len = u32(ad, 12)
+        if (len == 0L || len > MAX_BYTES || total != chunks(len.toInt()) || chunk >= total) return null
+        val want = minOf(CHUNK_DATA.toLong(), len - chunk * CHUNK_DATA)
+        if ((n - HDR).toLong() != want) return null
+        return Pkt(u8(ad, 6), u8(ad, 7), chunk, total, len.toInt(), u32(ad, 16), ad.copyOfRange(HDR, n))
+    }
+
+    // clip_beacon_parse: the beacon AD among the ADs of an extended advert: a phone's clip set ('B') or a board's
+    // train ('T', clip_train_beacon: the boards themselves ignore it), else null
+    private const val TRAIN = 'T'.code
+    fun beaconParse(p: ByteArray): Beacon? {
+        for (a in ads(p)) {
+            if ((a.size == 9 || a.size == 10) && u8(a, 1) == 0xFF && u8(a, 2) == 0xFF && u8(a, 3) == 0xFF &&
+                u8(a, 4) == MeshProto.PROTO && (u8(a, 5) == BEACON || u8(a, 5) == TRAIN))
+                return Beacon(u8(a, 6), u8(a, 7), u8(a, 8), if (a.size == 10 && u8(a, 9) == 8) 8 else 16)
+        }
+        return null
+    }
+
+    // clip_rx_t: the chunks of one clip (origin, id) as they come, in any order, repeats ignored
+    class Rx(val origin: Int, val id: Int) {
+        var total = 0
+            private set
+        var len = 0
+            private set
+        var crc = 0L
+            private set
+        var have = 0
+            private set
+        var active = true
+            private set
+        private val buf = ByteArray(MAX_BYTES)
+        private val got = BooleanArray(MAX_CHUNKS)
+
+        // True once, on the packet that completes the clip with a matching CRC-32
+        fun add(p: Pkt): Boolean {
+            if (!active || p.origin != origin || p.id != id) return false
+            if (total == 0) {                                   // the first packet fixes the clip's size
+                total = p.total
+                len = p.len
+                crc = p.crc
+            } else if (p.total != total || p.len != len || p.crc != crc) {
+                return false                                    // another clip under the same id: ignore it
+            }
+            if (got[p.chunk]) return false
+            System.arraycopy(p.data, 0, buf, p.chunk * CHUNK_DATA, p.data.size)
+            got[p.chunk] = true
+            if (++have < total) return false
+            active = false
+            return crc32(buf, len) == crc
+        }
+
+        val missing get() = if (total > 0) total - have else -1
+        fun bytes(): ByteArray = buf.copyOf(len)
     }
 }

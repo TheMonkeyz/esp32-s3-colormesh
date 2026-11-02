@@ -5,6 +5,7 @@
 #define PROTO 0x43
 #define KIND  'V'
 #define BEACON 'B'
+#define TRAIN  'T'
 
 uint32_t clip_crc32(const uint8_t *p, size_t n)
 {
@@ -87,6 +88,13 @@ bool clip_next_ad(const uint8_t *p, size_t n, size_t *off, const uint8_t **ad, s
     *ad_len = (size_t)p[*off] + 1;
     *off += *ad_len;
     return true;
+}
+
+int clip_train_beacon(uint8_t origin, uint8_t id, uint8_t ds, uint8_t out[CLIP_BEACON_LEN])
+{
+    const uint8_t b[CLIP_BEACON_LEN] = { CLIP_BEACON_LEN - 1, 0xFF, 0xFF, 0xFF, PROTO, TRAIN, origin, id, ds, 16 };
+    memcpy(out, b, CLIP_BEACON_LEN);
+    return CLIP_BEACON_LEN;
 }
 
 bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds, uint8_t *khz)

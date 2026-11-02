@@ -110,4 +110,20 @@ class PhoneMeshTest {
         m.tick(600)
         assertEquals(0, m.holders())
     }
+
+    // A board's clip on air (F_CLIP + id): one event per clip id per address; a peer that left starts afresh
+    @Test fun clipHeardOncePerId() {
+        val m = PhoneMesh(0x42, Random(1))
+        fun adv(seq: Int, clip: Boolean, id: Int) = MeshProto.encodeValue(MeshProto.State(origin = 0x9a, seq = seq,
+            flags = if (clip) MeshProto.F_CLIP else 0, clipId = id, clipDs = 50, advDs = 2))
+        assertTrue(m.onReport("AA", adv(1, false, 0), -50, 1000).isEmpty())
+        assertEquals(listOf<PhoneMesh.Event>(PhoneMesh.Event.ClipHeard("AA", 0x9a, 7, 50)),
+            m.onReport("AA", adv(2, true, 7), -50, 1100))
+        assertTrue(m.onReport("AA", adv(3, true, 7), -50, 1200).isEmpty())        // the same clip, still on air
+        assertTrue(m.onReport("AA", adv(4, false, 7), -50, 1300).isEmpty())       // over
+        assertEquals(1, m.onReport("AA", adv(5, true, 8), -50, 1400).size)        // the next one
+        assertEquals(1, m.onReport("BB", adv(5, true, 8), -50, 1400).size)        // another board, its own ids
+        m.tick(20000)                                                             // both left (10 s)
+        assertEquals(1, m.onReport("AA", adv(1, true, 8), -50, 20100).size)       // a restarted board: id 8 is new
+    }
 }

@@ -24,6 +24,7 @@ class PhoneMesh(origin: Int, private val rnd: Random = Random.Default) {
         data class WaveHeard(val kind: Int, val origin: Int) : Event()
         data class Ring(val origin: Int, val rgb: IntArray) : Event()
         data class Answer(val origin: Int, val rgb: IntArray) : Event()
+        data class ClipHeard(val addr: String, val origin: Int, val id: Int, val ds: Int) : Event()   // on air now
     }
     enum class CallPhase { NONE, OUT, ANSWERED }
 
@@ -45,6 +46,7 @@ class PhoneMesh(origin: Int, private val rnd: Random = Random.Default) {
 
     private class Eff(var active: Boolean, var seq: Int, var lastMs: Long)
     private val eff = HashMap<String, Eff>()
+    private val clipSeen = HashMap<String, Int>()   // per address: the last clip id handed out (mesh.c clip_seen)
 
     // Outgoing call (calls.c) and an incoming ring
     private var callActive = false
@@ -137,7 +139,17 @@ class PhoneMesh(origin: Int, private val rnd: Random = Random.Default) {
             pickOrigin(st.origin)                   // a board uses this origin: take another one
         }
         table.update(addr, st, rssi, nowMs)
-        return peerEffect(addr, st, nowMs)
+        val out = ArrayList(peerEffect(addr, st, nowMs))
+        clipHeard(addr, st)?.let { out.add(it) }
+        return out
+    }
+
+    // mesh.c clip_report: a peer advertising F_CLIP with a clip id not handed out yet for its address. The clip is
+    // on its periodic train right now: the radio must sync to it at once.
+    private fun clipHeard(addr: String, st: MeshProto.State): Event? {
+        if (st.flags and MeshProto.F_CLIP == 0 || clipSeen[addr] == st.clipId) return null
+        clipSeen[addr] = st.clipId
+        return Event.ClipHeard(addr, st.origin, st.clipId, st.clipDs)
     }
 
     // A free origin byte (not 0, not 0xFF, not a peer's)
@@ -202,6 +214,7 @@ class PhoneMesh(origin: Int, private val rnd: Random = Random.Default) {
         waves.removeAll { nowMs - it.startMs >= WAVE_DURATION_MS }
         ringing?.let { if (nowMs - it.startMs >= RING_MS) ringing = null }
         eff.entries.removeAll { nowMs - it.value.lastMs > MeshProto.PEER_EXPIRY_MS }
+        if (n > 0) clipSeen.keys.retainAll(table.peers.map { it.addr }.toSet())   // a peer that left starts afresh
         return n > 0
     }
 

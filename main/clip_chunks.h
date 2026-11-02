@@ -52,6 +52,12 @@ bool clip_next_ad(const uint8_t *p, size_t n, size_t *off, const uint8_t **ad, s
 //   [9] [0xFF] [0xFF 0xFF] 0x43 'B' origin id tenths kHz   (kHz: the clip's sample rate, 8 or 16; a beacon without
 // that byte, [8] ..., is 16). The phone records at 8 kHz: Android sends one chunk per 100 ms, 4x slower than a board.
 bool clip_beacon_parse(const uint8_t *p, size_t n, uint8_t *origin, uint8_t *id, uint8_t *ds, uint8_t *khz);
+// A board's train beacon, the extended advertising data of its clip set (mesh.c instance 1): the beacon's shape with
+// kind 'T', so a board (which syncs to a peer's train from the flood advert) never takes it for a phone's beacon,
+// while the Android app (Clip.kt beaconParse) finds the train by it: Android reports an extended advert only when it
+// carries data (Pixel 8 Pro, 2026-11-01). Always 16 kHz. Fills out, returns CLIP_BEACON_LEN.
+#define CLIP_BEACON_LEN 10
+int clip_train_beacon(uint8_t origin, uint8_t id, uint8_t ds, uint8_t out[CLIP_BEACON_LEN]);
 // An 8 kHz clip played at 16 kHz: n samples at the start of pcm become 2n, each followed by the mean of it and the
 // next (the last repeated). In place (pcm holds 2n samples).
 void clip_upsample2(int16_t *pcm, size_t n);

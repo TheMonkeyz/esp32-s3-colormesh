@@ -108,7 +108,7 @@ typedef void (*mesh_beacon_cb_t)(const uint8_t addr[6], uint8_t addr_type, uint8
 void mesh_set_beacon_hook(mesh_beacon_cb_t cb);
 // The clip's periodic set on instance 1 (clip.c): start with the periodic interval in 1.25 ms units, change the
 // periodic data (any length up to 247), stop. Synchronous, under the radio lock. 0 = ok, else a NimBLE rc.
-int mesh_clip_adv_start(uint16_t per_itvl);
+int mesh_clip_adv_start(uint16_t per_itvl, uint8_t id, uint8_t ds);   // the set's data: the train beacon (id, ds)
 int mesh_clip_adv_data(const uint8_t *data, int len);
 void mesh_clip_adv_stop(void);
 // Radio counters (risk 3 of docs/RESEARCH-BLE.md); also in the test console's "where" (ble_rep= ble_cm= ...)

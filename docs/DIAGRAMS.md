@@ -246,8 +246,8 @@ boards) and ESP-NOW (Wi-Fi).
 flowchart TB
   flood["The flood<br/>legacy ADV_NONCONN_IND every 20 ms, 30 bytes:<br/>colour · holding · dev · version · target ·<br/>effect · colour B · game · clip id"]
   scan["Continuous passive scan<br/>100 ms window = interval, no duplicate filter<br/>every ColorMesh report → the mesh task"]
-  train["The periodic train (voice)<br/>extended set, SID 1, 100 ms; periodic data every 10 ms,<br/>2M PHY, 244-byte chunks, 3 rounds"]
-  sync["Periodic sync (voice)<br/>a listener syncs to the sender's train,<br/>collects the chunks, plays at once"]
+  train["The periodic train (voice)<br/>extended set, SID 1, 100 ms, the train beacon;<br/>periodic data every 10 ms, 2M PHY, 244-byte chunks, 3 rounds"]
+  sync["Periodic sync (voice)<br/>a board or the phone syncs to the sender's train,<br/>collects the chunks, plays at once"]
   link["One GATT connection (firmware)<br/>central = the serving board, peripheral = the puller<br/>2M PHY · DLE 251 · MTU 512 · 7.5 ms"]
   table["Peer table + mix<br/>16 entries by address, self included<br/>hold expiry 250 ms, peer expiry 10 s"]
   effects["Effects in the flood<br/>waves (bytes 17-21), calls and answers (17-18, 28),<br/>the game (22-25): state, not events"]
@@ -386,7 +386,10 @@ every 10 ms, and swaps the periodic data every 10 ms: one 224-byte chunk per pac
 5 s of voice takes 5.4 s on air for any number of listeners. Meanwhile the flood advert carries flag bit5 and the
 clip id. A board that hears a new clip id from that address syncs to the train, fills a bitmap of chunks, and plays
 as soon as every chunk is in and the CRC-32 matches. A lost train, no sync within 4 s or a bad CRC drops it. One
-hop only.
+hop only. The train's own extended advert carries a 10-byte train beacon ('T', origin, id, length): the boards
+ignore it, the phone app needs it (Android reports an extended advert only when it has data) and then syncs through
+the Bluetooth service's hidden registerSync, with its own Binder as the callback (ARCHITECTURE "Voice clips to the
+phone").
 
 ```mermaid
 sequenceDiagram
@@ -397,11 +400,13 @@ sequenceDiagram
   participant MB as mesh task (B)
   participant HB as host task (B)
   participant CB as clip task (B)
+  participant P as phone app
 
   F->>C: hold the voice page, talk, release
   C->>C: level, IMA ADPCM 4:1, CRC-32, chunks of 224 bytes
-  C->>M: mesh_clip_adv_start(10 ms), mesh_set_clip(id, on)
+  C->>M: mesh_clip_adv_start(10 ms, id, length), mesh_set_clip(id, on)
   M-->>Air: flood: MP_F_CLIP, clip id, length
+  M-->>Air: AUX_ADV_IND every 100 ms: the train beacon 'T' · origin · id
   loop 3 rounds × every chunk, one every 10 ms
     C->>M: mesh_clip_adv_data(chunk)
     M-->>Air: AUX_SYNC_IND: 'V' · origin · id · chunk · total · len · crc · data
@@ -413,11 +418,16 @@ sequenceDiagram
   HB->>HB: clip_parse, clip_rx_add (bitmap, under rx_lock)
   HB->>CB: every chunk in, CRC ok
   CB->>CB: terminate the sync, decode, 250 ms silence, play
+  Air-->>P: flood report with a new clip id (PhoneMesh.clipHeard)
+  P->>P: extended scan, the beacon's report, IBluetoothScan.registerSync (Hidden.kt)
+  Air-->>P: periodic reports to SyncBinder, Clip.Rx fills the bitmap
+  P->>P: every chunk in, CRC ok: decode, play
   C->>M: mesh_set_clip(off), mesh_clip_adv_stop
 ```
 
 Verified on three boards: B's 5 s clip reached A whole (179 chunks, 0 holes) and C. The flood stayed at 58-60
-ColorMesh reports/s with extended advertising on (62 before).
+ColorMesh reports/s with extended advertising on (62 before). The phone (Pixel 8 Pro, Android 17, v0.8.0-rc.2):
+A's 5 s clips whole after 3.6 and 5.3 s, synced 180-300 ms after the flood flag, CRC ok, played at 16 kHz.
 
 ## Updates
 

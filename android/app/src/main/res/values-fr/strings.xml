@@ -22,4 +22,7 @@
     <string name="no_clips">Ce téléphone ne peut pas envoyer de messages vocaux (pas d’annonces Bluetooth périodiques).</string>
     <string name="no_mic">Aucun microphone</string>
     <string name="clip_failed">Le message vocal n’est pas parti.</string>
+    <string name="receiving">Réception…</string>
+    <string name="playing">Lecture…</string>
+    <string name="clip_lost">Le message vocal n’est pas arrivé.</string>
 </resources>

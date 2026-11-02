@@ -312,6 +312,14 @@ static void test_phone_clip(void)
     CHECK(!clip_beacon_parse(beacon, sizeof(beacon), &o, &id, &ds, &khz), "not a beacon");
     CHECK(!clip_beacon_parse(pkt, n, &o, &id, &ds, &khz), "clip chunks are not a beacon");
 
+    // a board's train beacon (mesh.c instance 1): the phone finds the train by it; a board never takes it for a
+    // phone's beacon
+    uint8_t train[CLIP_BEACON_LEN];
+    CHECK(clip_train_beacon(0x9a, 7, 50, train) == CLIP_BEACON_LEN, "train beacon length");
+    static const uint8_t want_train[CLIP_BEACON_LEN] = { 9, 0xFF, 0xFF, 0xFF, 0x43, 'T', 0x9a, 7, 50, 16 };
+    CHECK(!memcmp(train, want_train, CLIP_BEACON_LEN), "train beacon bytes");
+    CHECK(!clip_beacon_parse(train, CLIP_BEACON_LEN, &o, &id, &ds, &khz), "a train beacon is not a phone's beacon");
+
     // 8 kHz to 16 kHz in place
     int16_t up[8] = { 100, -100, 32767, 32767 };
     clip_upsample2(up, 4);

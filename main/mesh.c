@@ -1100,9 +1100,10 @@ bool mesh_synced(void) { return synced; }
 void mesh_set_gap_hook(mesh_gap_hook_t hook) { gap_hook = hook; }
 
 #if MYNEWT_VAL(BLE_EXT_ADV) && MYNEWT_VAL(BLE_PERIODIC_ADV)
-// Instance 1: a non-connectable, non-scannable extended set every 100 ms (it carries only the sync info) on 1M, its
-// periodic train on 2M (shorter packets)
-int mesh_clip_adv_start(uint16_t per_itvl)
+// Instance 1: a non-connectable, non-scannable extended set every 100 ms on 1M, its periodic train on 2M (shorter
+// packets). The set carries the train beacon (clip_chunks.h clip_train_beacon): the boards sync from the flood advert
+// and ignore it, the Android app finds the train by it (Android reports an extended advert only when it has data).
+int mesh_clip_adv_start(uint16_t per_itvl, uint8_t id, uint8_t ds)
 {
     if (!synced) return BLE_HS_ENOTSYNCED;
     struct ble_gap_ext_adv_params p = { 0 };
@@ -1116,6 +1117,14 @@ int mesh_clip_adv_start(uint16_t per_itvl)
     xSemaphoreTake(radio_lock, portMAX_DELAY);
     if (ble_gap_ext_adv_active(MESH_ADV_CLIP)) ble_gap_ext_adv_stop(MESH_ADV_CLIP);
     int rc = ble_gap_ext_adv_configure(MESH_ADV_CLIP, &p, NULL, gap_event, NULL);
+    if (!rc) {
+        uint8_t b[CLIP_BEACON_LEN];
+        int n = clip_train_beacon(own_origin, id, ds, b);
+        struct os_mbuf *m = os_msys_get_pkthdr(n, 0);
+        rc = m ? os_mbuf_append(m, b, n) : BLE_HS_ENOMEM;
+        if (!rc) rc = ble_gap_ext_adv_set_data(MESH_ADV_CLIP, m);   // takes the mbuf, even on failure
+        else if (m) os_mbuf_free_chain(m);
+    }
     if (!rc) rc = ble_gap_periodic_adv_configure(MESH_ADV_CLIP, &pp);
     if (!rc) rc = ble_gap_periodic_adv_start(MESH_ADV_CLIP);
     if (!rc) rc = ble_gap_ext_adv_start(MESH_ADV_CLIP, 0, 0);
@@ -1146,7 +1155,7 @@ void mesh_clip_adv_stop(void)
     ESP_LOGI(TAG_BLE, "clip periodic set down");
 }
 #else
-int mesh_clip_adv_start(uint16_t per_itvl) { return BLE_HS_ENOTSUP; }
+int mesh_clip_adv_start(uint16_t per_itvl, uint8_t id, uint8_t ds) { return BLE_HS_ENOTSUP; }
 int mesh_clip_adv_data(const uint8_t *data, int len) { return BLE_HS_ENOTSUP; }
 void mesh_clip_adv_stop(void) {}
 #endif

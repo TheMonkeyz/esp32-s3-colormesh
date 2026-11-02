@@ -65,8 +65,11 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests.isReturnDefaultValues = true }
+    dependenciesInfo { includeInApk = false; includeInBundle = false }   // no dependency list in the APK
 }
 
 dependencies {
+    compileOnly(project(":hidden"))                       // the hidden periodic sync API's shapes, never shipped
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")   // unlocks it (Hidden.kt)
     testImplementation("junit:junit:4.13.2")
 }

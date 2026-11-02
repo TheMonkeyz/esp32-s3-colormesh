@@ -313,7 +313,9 @@ every board, not one link per board).
   three boards (rc.1): 58-60 ColorMesh reports/s (62 before), holds mixed as before, firmware pulls 52 KB/s.
 - **Send**: hold on the voice page, up to 5 s (16 kHz mono, both microphones averaged, DC removed, a quiet clip scaled
   up to peak 26000, at most x8), then IMA ADPCM 4:1: 5 s = 40,000 bytes. Instance 1 is a non-connectable extended set
-  (SID 1, 100 ms, 2M secondary PHY) with a **periodic train every 10 ms**. The clip is cut into 224-byte chunks
+  (SID 1, 100 ms, 2M secondary PHY) with a **periodic train every 10 ms**; its advertising data is the **train
+  beacon** `[9] FF FF FF 43 'T' origin id tenths 16` (`clip_train_beacon`, v0.8.0-rc.2: the phone finds the train by
+  it; a board's `clip_beacon_parse` takes only 'B', so nothing changes between boards, old or new). The clip is cut into 224-byte chunks
   (`clip_chunks.h`: one manufacturer AD, `0x43 'V'`, origin, clip id, chunk, total, length, CRC-32, data; 244 bytes,
   one AUX_SYNC_IND) and the sender changes the periodic data every 10 ms, 3 rounds over all chunks: 5 s of voice
   (179 chunks) takes 5.4 s on air for any number of boards. While the train runs the flood advert carries
@@ -345,7 +347,7 @@ every board, not one link per board).
 - **Verified** (rc.3, three boards): B's 5 s clip reached A whole (`clip 6 from 76 complete, 40000 bytes, 0 holes`,
   `played 5.00 s`) and C (the user heard it); calls rang on B and C, a tap stopped them on A.
 
-### Phone app (android/, main/mesh_proto.c, clip.c, clip_chunks.c; v0.7.0)
+### Phone app (android/, main/mesh_proto.c, clip.c, clip_chunks.c; v0.7.0, hears clips since v0.8.0-rc.2)
 
 The user's choices (2026-11-01): a native Android app rather than a web page (Web Bluetooth cannot advertise or
 scan, so a page would need a gateway board and a GATT service: too much firmware and RAM); one screen (mockup A:
@@ -378,7 +380,28 @@ iOS does not let an app advertise manufacturer data.
   is whole. Measured on board A (v0.7.0-rc.2): 2.8 s clip whole after 8.5 s, 3.9 s after 18 s, 4.9 s after 15 s,
   0 holes, all three boards played. The boards also put long periodic packets back together (`clip_frag_*`) and
   read every chunk AD in one (company ids 0xFFxx), ready for a phone that can send more per packet.
-- The phone cannot play the boards' clips: Android has no public API to sync to another device's periodic train.
+- **Voice clips to the phone** (v0.8.0-rc.2; `Hidden.kt`, `Radio.kt` listenClip and SyncBinder, `Clip.kt` Rx and
+  adpcmDecode, `PhoneMesh.kt` ClipHeard): the phone syncs to a board's train as a board does and plays the clip as
+  soon as it is whole. Android has no public API for that, and **Android 17 dropped even the hidden one**:
+  `PeriodicAdvertisingManager` is gone from the phone's framework-bluetooth.jar (Pixel 8 Pro;
+  `adb pull /apex/com.android.bt/javalib/framework-bluetooth.jar` and `dexdump` show what a release really has).
+  What is left is the Bluetooth service's own call, `IBluetoothScan.registerSync(ScanResult, skip, timeout,
+  IPeriodicAdvertisingCallback, AttributionSource)`, the one the LE Audio broadcast assistant uses. `Hidden.kt`
+  reaches it with HiddenApiBypass 6.1 (LSPosed): its `invoke` finds a method through ART's own tables, not through
+  reflection, so the non-SDK restriction never sees it (`getBluetoothScan`, `getAttributionSource`, `registerSync`,
+  `unregisterSync`). The callback is the app's own `Binder`, which implements the hidden interface (a compile-only
+  stub in `android/hidden/`) and reads the transactions itself (1 onSyncEstablished, 2 onPeriodicAdvertisingReport:
+  four ints, a flag, the bytes, 3 onSyncLost; oneway). Two more findings: Android reports an extended advert **only
+  when it carries data** (the train's AUX_ADV_IND with the sync info alone was never reported, with or without a
+  scan filter: 530 reports in 4 s, none from the board's train), hence the train beacon above, found by a short
+  extended scan (`setLegacy(false)`, no filter, matched on the sender's address or the beacon's origin and id)
+  started when the flood says `MP_F_CLIP` with a new clip id (`PhoneMesh.clipHeard`, as mesh.c `clip_report`); and a
+  scan filtered on the sender's address found nothing even then. Measured (Pixel 8 Pro, Android 17, board A's
+  clips): the beacon's report 50-80 ms after the flood flag, sync established 180-300 ms, whole after 1.5 s (a 1.8 s
+  clip), 3.6 and 5.3 s (5 s clips: 329 and 466 of 537 packets heard), CRC ok every time, played at 16 kHz. The
+  alternative kept in reserve: a GATT pull from a board (public API, 1-3 s later than the boards). Android 12 or
+  newer (the service signature with an AttributionSource); a phone that cannot logs `cannot hear clips: <why>` and
+  shows "did not arrive".
 - Signing: one release key outside the repo (`C:\Users\lmathieu\ESPDEV\keys\colormesh-android.jks`, its
   passwords in the `.txt` beside it), in CI from the `CM_KEYSTORE_*` secrets; the same key every release, so an
   update installs over the app. CI job `android` (unit tests + APK, attached to the release); the pages job puts the

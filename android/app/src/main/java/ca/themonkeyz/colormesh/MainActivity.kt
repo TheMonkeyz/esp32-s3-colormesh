@@ -242,7 +242,25 @@ class MainActivity : Activity() {
                 is PhoneMesh.Event.Ring -> Log.i(TAG, "ring from %02x".format(e.origin))
                 is PhoneMesh.Event.Answer -> { Log.i(TAG, "answer from %02x".format(e.origin)); play(RingTone.ANSWERED) }
                 is PhoneMesh.Event.WaveHeard -> Log.i(TAG, "wave %d from %02x".format(e.kind, e.origin))
+                is PhoneMesh.Event.ClipHeard -> hearClip(e)
             }
+        }
+    }
+
+    // A peer's clip is on its periodic train: sync to it and play it, as the boards do (Radio.listenClip)
+    private fun hearClip(e: PhoneMesh.Event.ClipHeard) {
+        val r = radio ?: return
+        if (!r.canHearClips) {
+            Log.w(TAG, "clip ${e.id} from %02x: this phone cannot hear clips (${Hidden.why})".format(e.origin))
+            return
+        }
+        status.text = getString(R.string.receiving)
+        r.listenClip(e.addr, e.origin, e.id, e.ds) { bytes, khz ->
+            if (bytes == null) { status.text = getString(R.string.clip_lost); return@listenClip }
+            val pcm = Clip.adpcmDecode(bytes)
+            status.text = getString(R.string.playing)
+            Log.i(TAG, "clip ${e.id}: playing ${pcm.size / khz} ms at $khz kHz")
+            play(pcm, khz * 1000, AudioAttributes.USAGE_MEDIA) { status.text = "" }
         }
     }
 
@@ -336,12 +354,14 @@ class MainActivity : Activity() {
 
     // ---- sound ----
 
-    private fun track(pcm: ShortArray): AudioTrack {
+    // A mono 16-bit clip, whole in memory (the ring tones at RingTone.RATE; a voice clip at its own rate)
+    private fun track(pcm: ShortArray, rate: Int = RingTone.RATE, usage: Int = AudioAttributes.USAGE_NOTIFICATION_RINGTONE): AudioTrack {
+        val content = if (usage == AudioAttributes.USAGE_MEDIA) AudioAttributes.CONTENT_TYPE_SPEECH
+                      else AudioAttributes.CONTENT_TYPE_SONIFICATION
         val t = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(usage).setContentType(content).build())
             .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(RingTone.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                .setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
             .setTransferMode(AudioTrack.MODE_STATIC)
             .setBufferSizeInBytes(pcm.size * 2)
             .build()
@@ -359,12 +379,16 @@ class MainActivity : Activity() {
         ringTrack = null
     }
 
-    private fun play(notes: Array<Pair<Int, Int>>) {
-        val pcm = RingTone.render(notes)
-        val t = track(pcm)
+    private fun play(notes: Array<Pair<Int, Int>>) = play(RingTone.render(notes), RingTone.RATE)
+
+    // Play once and free the track at the end
+    private fun play(pcm: ShortArray, rate: Int, usage: Int = AudioAttributes.USAGE_NOTIFICATION_RINGTONE,
+                     onEnd: () -> Unit = {}) {
+        if (pcm.isEmpty()) return onEnd()
+        val t = track(pcm, rate, usage)
         t.setNotificationMarkerPosition(pcm.size - 1)
         t.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
-            override fun onMarkerReached(tr: AudioTrack) { tr.release() }
+            override fun onMarkerReached(tr: AudioTrack) { tr.release(); onEnd() }
             override fun onPeriodicNotification(tr: AudioTrack) {}
         })
         t.play()

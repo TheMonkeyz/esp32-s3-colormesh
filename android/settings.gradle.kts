@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "colormesh"
 include(":app")
+include(":hidden")
